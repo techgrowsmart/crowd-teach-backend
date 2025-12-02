@@ -1,0 +1,13 @@
+1.When the teachers Subscribe for spotlight(spotlight-tarriff), if  they're done the payment,
+    in the "teachers1" table "isspotlight" column changes "popular" to "spotlight".
+    Based on this Redis separate the teachers.
+
+2.For the students when they enrole the teacher, like they have done the payment for the tuitions
+    that teacher added to the contacts directly in the firebase, for both teachers and students.
+
+3.Make sure we need to build the development through expo by using expo development configure through EAS.Some native modules are not compatable
+    with expo go they won't work(razorpay,firebase messaging for push notifications).
+
+4.Follow this "https://docs.expo.dev/develop/development-builds/create-a-build/" for build once build is complete
+    it will generate the Qr code to downlode the apk in physical device or we can run it in the emulator.
+

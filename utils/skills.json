@@ -1,0 +1,38 @@
+[
+    {
+        "id": "skill_dance",
+        "name": "Dance",
+        "image": "@/assets/image/Dance.jpeg",
+
+    },
+    {
+        "id": "skill_music",
+        "name": "Music",
+        "image": "@/assets/image/music.jpeg",
+
+    },
+    {
+        "id": "skill_photography",
+        "name": "Photography",
+        "image": "@/assets/image/Photography.jpeg",
+
+    },
+    {
+        "id": "skill_workout",
+        "name": "Workout",
+        "image": "@/assets/image/workout.jpeg",
+
+    },
+    {
+        "id": "skill_cooking",
+        "name": "Cooking",
+        "image": "@/assets/image/cooking.jpeg",
+
+    },
+    {
+        "id": "skill_art",
+        "name": "Art",
+        "image": "@/assets/image/Art.jpeg",
+
+    }
+]
