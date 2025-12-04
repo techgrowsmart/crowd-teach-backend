@@ -9,6 +9,17 @@ const client = require("../../config/db");
 let redisLastLoaded = null;
 const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
+async function ensureRedis() {
+  try {
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+    }
+  } catch (err) {
+    console.warn('⚠️ Redis connect failed or not required:', err && err.message ? err.message : err);
+    redisClient.isOpen = true;
+  }
+}
+
 router.post("/teachers", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
     const searchQuery = req.body.search || "";
@@ -18,14 +29,7 @@ router.post("/teachers", verifyToken, async (req, res) => {
     const redisPopularKey = `teachersQueue:popular:`;
     
     try {
-if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        redisClient.isOpen = true;
-    }
-}
-
+        await ensureRedis();
 
         const totalSpotlightCount = await redisClient.lLen(redisSpotlightKey);
         const totalPopularCount = await redisClient.lLen(redisPopularKey);
@@ -207,16 +211,8 @@ async function shouldReloadRedis(spotlightKey, popularKey) {
 async function reloadRedisData() {
     try {
         console.log(`🔄 Loading teachers from TEACHERS1 table...`);
-        
-if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        redisClient.isOpen = true;
-    }
-}
+        await ensureRedis();
 
-        
         // Clear existing Redis data
         await redisClient.del('teachersQueue:spotlight:');
         await redisClient.del('teachersQueue:popular:');
