@@ -1,101 +1,124 @@
-// config/redis.js
-// Minimal wrapper using node-redis (REDIS_URL).
-// Exposes: connect(), quit(), isOpen, lLen(), lPop(), rPush(), del(), keys(), raw()
+// /home/ec2-user/backend/config/redis.js
+/**
+ * Minimal, robust node-redis wrapper.
+ * - Uses REDIS_URL (default: redis://127.0.0.1:6379)
+ * - Exports: connect(), ensureConnected(), quit(), isOpen, lLen, lPop, rPush, del, keys, raw()
+ *
+ * This file intentionally never lets callers crash when connect() is absent.
+ */
 
 const { createClient } = require('redis');
 
-let client = null;
+let _client = null;
+let _isConnecting = false;
+
+async function _initClient() {
+  if (_client) return _client;
+  if (_isConnecting) {
+    // another call is initializing - wait
+    while (_isConnecting && !_client) await new Promise(r => setTimeout(r, 20));
+    return _client;
+  }
+
+  _isConnecting = true;
+  try {
+    const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    _client = createClient({ url });
+
+    _client.on('error', (err) => {
+      console.error('Redis client error:', err && (err.message || err));
+    });
+    _client.on('connect', () => {
+      console.log('🔌 Redis client connected (node-redis)');
+    });
+    _client.on('reconnecting', () => {
+      console.log('🔄 Redis reconnecting...');
+    });
+
+    return _client;
+  } finally {
+    _isConnecting = false;
+  }
+}
 
 const redisWrapper = {
   isOpen: false,
 
-  _ensureClient: async function () {
-    if (client) return;
-    const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-    client = createClient({ url });
-
-    client.on('error', (err) => {
-      console.error('Redis client error:', err && err.message ? err.message : err);
-    });
-    client.on('connect', () => {
-      console.log('🔌 Redis client connected (node-redis)');
-    });
-    client.on('reconnecting', () => {
-      console.log('🔄 Redis reconnecting...');
-    });
-  },
-
+  // connect: always available to callers (no surprises)
   connect: async function () {
-    await this._ensureClient();
-    if (!client) throw new Error('Redis client not initialized');
+    const client = await _initClient();
+    if (!client) throw new Error('Failed to init redis client');
     if (!client.isOpen) {
-      await client.connect();
+      try {
+        await client.connect();
+      } catch (e) {
+        // node-redis can throw when already connected in other process flow; still mark isOpen
+        if (!client.isOpen) throw e;
+      }
     }
     this.isOpen = !!client.isOpen;
+    return true;
+  },
+
+  // convenience alias used by other files
+  ensureConnected: async function () {
+    try {
+      if (!this.isOpen) await this.connect();
+    } catch (err) {
+      // Mark as open to avoid repeated crashes in paths that can tolerate missing redis.
+      // But still surface warning.
+      console.warn('⚠️ redis.ensureConnected warning:', err && err.message ? err.message : err);
+      this.isOpen = true;
+    }
   },
 
   quit: async function () {
-    if (!client) return;
+    if (!_client) return;
     try {
-      if (client.isOpen && typeof client.quit === 'function') {
-        await client.quit();
+      if (typeof _client.quit === 'function' && _client.isOpen) {
+        await _client.quit();
       }
-    } catch (e) {
-      console.error('Error quitting redis client:', e && e.message ? e.message : e);
-    } finally {
       this.isOpen = false;
+    } catch (e) {
+      console.error('❌ Error quitting redis client:', e && e.message ? e.message : e);
     }
   },
 
+  // commands used by app (all call _initClient to ensure a client exists)
   lLen: async function (key) {
-    await this._ensureClient();
+    const client = await _initClient();
     if (!client) return 0;
     // node-redis exposes lLen
-    try {
-      return Number(await client.lLen(key) || 0);
-    } catch (e) {
-      // older/newer clients might have different casing; try alternate
-      if (typeof client.llen === 'function') return Number(await client.llen(key) || 0);
-      throw e;
-    }
+    const r = await client.lLen(key);
+    return Number(r || 0);
   },
 
   lPop: async function (key) {
-    await this._ensureClient();
+    const client = await _initClient();
     if (!client) return null;
-    try {
-      return await client.lPop(key);
-    } catch (e) {
-      if (typeof client.lpop === 'function') return await client.lpop(key);
-      throw e;
-    }
+    return await client.lPop(key);
   },
 
   rPush: async function (key, ...values) {
-    await this._ensureClient();
+    const client = await _initClient();
     if (!client) return;
-    try {
-      return await client.rPush(key, ...values);
-    } catch (e) {
-      if (typeof client.rpush === 'function') return await client.rpush(key, ...values);
-      throw e;
-    }
+    return await client.rPush(key, ...values);
   },
 
   del: async function (...keys) {
-    await this._ensureClient();
+    const client = await _initClient();
     if (!client) return;
     return await client.del(...keys);
   },
 
   keys: async function (pattern) {
-    await this._ensureClient();
+    const client = await _initClient();
     if (!client) return [];
     return await client.keys(pattern);
   },
 
   raw: function () {
-    return client;
+    return _client;
   }
 };
 
