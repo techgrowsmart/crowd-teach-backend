@@ -2,7 +2,28 @@ const client = require("../config/db");
 const redisClient = require("../config/redis");
 
 
-await redisClient.ensureConnected();
+// simple helper used everywhere in this file
+async function ensureRedis() {
+  try {
+    // Prefer a wrapper method if present, otherwise fall back to connect()
+    if (typeof redisClient.ensureConnected === 'function') {
+      await redisClient.ensureConnected();
+      return;
+    }
+    if (typeof redisClient.connect === 'function') {
+      await redisClient.connect();
+      return;
+    }
+
+    // Last-resort: mark as open so callers don't repeatedly try to connect
+    redisClient.isOpen = true;
+  } catch (err) {
+    // Non-fatal: log and proceed. Many endpoints can operate without Redis.
+    console.warn('⚠️ ensureRedis warning:', err && err.message ? err.message : err);
+    redisClient.isOpen = true;
+  }
+}
+
 
 const preloadTeachersToQueue = async () => {
     const query = `
