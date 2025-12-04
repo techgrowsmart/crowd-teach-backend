@@ -8,13 +8,9 @@ const client = require("../../config/db");
 let redisLastLoaded = null;
 const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-// simple helper used everywhere
-async function ensureRedis() {
-  try {
 // ensure redis client is ready (safe no-op if already connected)
 await redisClient.ensureConnected();
-  }
-}
+
 
 router.post("/teacherInfo", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
@@ -235,5 +231,6 @@ setTimeout(async () => {
 }, 5000);
 
 module.exports = router;
+
 
 
