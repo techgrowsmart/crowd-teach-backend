@@ -13,7 +13,7 @@ async function ensureRedis() {
   try {
 // ensure redis client is ready (safe no-op if already connected)
 await redisClient.ensureConnected();
-
+  }
 }
 
 router.post("/teacherInfo", verifyToken, async (req, res) => {
@@ -235,4 +235,5 @@ setTimeout(async () => {
 }, 5000);
 
 module.exports = router;
+
 
