@@ -31,15 +31,7 @@ async function ensureRedis() {
   }
 }
 
- 
-async function ensureRedis() {
-  try {
-// ensure redis client is ready (safe no-op if already connected)
-await redisClient.ensureConnected();
-
-}
-
-router.post("/teachers", verifyToken, async (req, res) => {
+ router.post("/teachers", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
     const searchQuery = req.body.search || "";
     const { board, className, subject } = req.body;
