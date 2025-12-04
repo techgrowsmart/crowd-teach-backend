@@ -32,9 +32,14 @@ const preloadTeachersToQueue = async () => {
         }
     }
 
-    if (!redisClient.isOpen) {
+if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
         await redisClient.connect();
+    } else {
+        redisClient.isOpen = true;
     }
+}
+
     const keysPopular = await redisClient.keys("teachersQueue:popular:*");
     if (keysPopular.length > 0) {
         await redisClient.del(keysPopular);
