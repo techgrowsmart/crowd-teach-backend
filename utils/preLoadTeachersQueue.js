@@ -1,11 +1,8 @@
 const client = require("../config/db");
 const redisClient = require("../config/redis");
 
-async function ensureRedis() {
-  try {
+
 await redisClient.ensureConnected();
-}
-}
 
 const preloadTeachersToQueue = async () => {
     const query = `
