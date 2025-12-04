@@ -1,6 +1,17 @@
 const client = require("../config/db");
 const redisClient = require("../config/redis");
 
+async function ensureRedis() {
+  try {
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+    }
+  } catch (err) {
+    console.warn('⚠️ Redis connect failed or not required (preload):', err && err.message ? err.message : err);
+    redisClient.isOpen = true;
+  }
+}
+
 const preloadTeachersToQueue = async () => {
     const query = `
     SELECT * FROM teachers1
@@ -32,17 +43,11 @@ const preloadTeachersToQueue = async () => {
         }
     }
 
-if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        redisClient.isOpen = true;
-    }
-}
+    await ensureRedis();
 
     const keysPopular = await redisClient.keys("teachersQueue:popular:*");
     if (keysPopular.length > 0) {
-        await redisClient.del(keysPopular);
+        await redisClient.del(...keysPopular);
     }
     for (const obj of teachersMap) {
         await redisClient.rPush("teachersQueue:popular:", JSON.stringify(obj)); // load new
@@ -50,16 +55,13 @@ if (!redisClient.isOpen) {
 
     const keysSpotlight = await redisClient.keys("teachersQueue:spotlight:*");
     if (keysSpotlight.length > 0) {
-        await redisClient.del(keysSpotlight);
+        await redisClient.del(...keysSpotlight);
     }
     for (const obj of spotlightMap) {
         await redisClient.rPush("teachersQueue:spotlight:", JSON.stringify(obj)); // load new
     }
 
-
-
-    await redisClient.quit();
-
+    // DO NOT quit connection here — keep client open for app lifetime
     console.log("📦 Filtered teachers preloaded into Redis queues.");
 };
 
