@@ -18,9 +18,14 @@ router.post("/teachers", verifyToken, async (req, res) => {
     const redisPopularKey = `teachersQueue:popular:`;
     
     try {
-        if (!redisClient.isOpen) {
-            await redisClient.connect();
-        }
+if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
+        await redisClient.connect();
+    } else {
+        redisClient.isOpen = true;
+    }
+}
+
 
         const totalSpotlightCount = await redisClient.lLen(redisSpotlightKey);
         const totalPopularCount = await redisClient.lLen(redisPopularKey);
@@ -203,9 +208,14 @@ async function reloadRedisData() {
     try {
         console.log(`🔄 Loading teachers from TEACHERS1 table...`);
         
-        if (!redisClient.isOpen) {
-            await redisClient.connect();
-        }
+if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
+        await redisClient.connect();
+    } else {
+        redisClient.isOpen = true;
+    }
+}
+
         
         // Clear existing Redis data
         await redisClient.del('teachersQueue:spotlight:');
