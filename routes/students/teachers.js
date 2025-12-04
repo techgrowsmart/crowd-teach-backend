@@ -9,15 +9,9 @@ const client = require("../../config/db");
 let redisLastLoaded = null;
 const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-// simple helper used everywhere in this file
-async function ensureRedis() {
-  try {
-    // ensure redis client is ready (safe no-op if already connected)
-    
+// simple helper used everywhere in this file    
       await redisClient.ensureConnected();
-  }
-}
-
+ 
 async function ensureRedis() {
   try {
 // ensure redis client is ready (safe no-op if already connected)
