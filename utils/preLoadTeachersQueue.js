@@ -3,13 +3,7 @@ const redisClient = require("../config/redis");
 
 async function ensureRedis() {
   try {
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-  } catch (err) {
-    console.warn('⚠️ Redis connect failed or not required (preload):', err && err.message ? err.message : err);
-    redisClient.isOpen = true;
-  }
+await redisClient.ensureConnected();
 }
 
 const preloadTeachersToQueue = async () => {
