@@ -8,6 +8,19 @@ const client = require("../../config/db");
 let redisLastLoaded = null;
 const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
+// simple helper used everywhere
+async function ensureRedis() {
+  try {
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+    }
+  } catch (err) {
+    // if connect() fails -> mark as open so stateless flows (or degraded) continue
+    console.warn('⚠️ Redis connect failed or not required:', err && err.message ? err.message : err);
+    redisClient.isOpen = true;
+  }
+}
+
 router.post("/teacherInfo", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
     const searchQuery = req.body.search || "";
@@ -17,15 +30,7 @@ router.post("/teacherInfo", verifyToken, async (req, res) => {
     const redisPopularKey = `teachersQueue:popular:teacherInfo`;
     
     try {
- if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        // Upstash (stateless) or wrapper without connect()
-        redisClient.isOpen = true;
-    }
-}
-
+        await ensureRedis();
 
         const totalSpotlightCount = await redisClient.lLen(redisSpotlightKey);
         const totalPopularCount = await redisClient.lLen(redisPopularKey);
@@ -177,17 +182,8 @@ async function shouldReloadRedis(spotlightKey, popularKey) {
 async function reloadTeacherInfoData() {
     try {
         console.log(`🔄 Loading teachers from TEACHER_INFO table...`);
-        
-if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        // Upstash (stateless) or wrapper without connect()
-        redisClient.isOpen = true;
-    }
-}
+        await ensureRedis();
 
-        
         // Clear existing Redis data
         await redisClient.del('teachersQueue:spotlight:teacherInfo');
         await redisClient.del('teachersQueue:popular:teacherInfo');
@@ -235,21 +231,12 @@ if (!redisClient.isOpen) {
 setTimeout(async () => {
     try {
         console.log("🚀 Auto-reloading TeacherInfo Redis on server start...");
-if (!redisClient.isOpen) {
-    if (typeof redisClient.connect === "function") {
-        await redisClient.connect();
-    } else {
-        // Upstash (stateless) or wrapper without connect()
-        redisClient.isOpen = true;
-    }
-}
-
+        await ensureRedis();
         await reloadTeacherInfoData();
         console.log("✅ TeacherInfo Redis auto-reload completed on server start");
     } catch (error) {
         console.error("❌ Failed to auto-reload TeacherInfo Redis on server start:", error);
     }
 }, 5000);
-
 
 module.exports = router;
