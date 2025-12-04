@@ -5,6 +5,7 @@ async function ensureRedis() {
   try {
 await redisClient.ensureConnected();
 }
+}
 
 const preloadTeachersToQueue = async () => {
     const query = `
