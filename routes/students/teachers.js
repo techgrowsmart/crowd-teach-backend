@@ -11,13 +11,9 @@ const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 async function ensureRedis() {
   try {
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-  } catch (err) {
-    console.warn('⚠️ Redis connect failed or not required:', err && err.message ? err.message : err);
-    redisClient.isOpen = true;
-  }
+// ensure redis client is ready (safe no-op if already connected)
+await redisClient.ensureConnected();
+
 }
 
 router.post("/teachers", verifyToken, async (req, res) => {
