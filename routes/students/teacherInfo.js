@@ -17,9 +17,15 @@ router.post("/teacherInfo", verifyToken, async (req, res) => {
     const redisPopularKey = `teachersQueue:popular:teacherInfo`;
     
     try {
-        if (!redisClient.isOpen) {
-            await redisClient.connect();
-        }
+ if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
+        await redisClient.connect();
+    } else {
+        // Upstash (stateless) or wrapper without connect()
+        redisClient.isOpen = true;
+    }
+}
+
 
         const totalSpotlightCount = await redisClient.lLen(redisSpotlightKey);
         const totalPopularCount = await redisClient.lLen(redisPopularKey);
@@ -172,9 +178,15 @@ async function reloadTeacherInfoData() {
     try {
         console.log(`🔄 Loading teachers from TEACHER_INFO table...`);
         
-        if (!redisClient.isOpen) {
-            await redisClient.connect();
-        }
+if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
+        await redisClient.connect();
+    } else {
+        // Upstash (stateless) or wrapper without connect()
+        redisClient.isOpen = true;
+    }
+}
+
         
         // Clear existing Redis data
         await redisClient.del('teachersQueue:spotlight:teacherInfo');
@@ -223,14 +235,21 @@ async function reloadTeacherInfoData() {
 setTimeout(async () => {
     try {
         console.log("🚀 Auto-reloading TeacherInfo Redis on server start...");
-        if (!redisClient.isOpen) {
-            await redisClient.connect();
-        }
+if (!redisClient.isOpen) {
+    if (typeof redisClient.connect === "function") {
+        await redisClient.connect();
+    } else {
+        // Upstash (stateless) or wrapper without connect()
+        redisClient.isOpen = true;
+    }
+}
+
         await reloadTeacherInfoData();
         console.log("✅ TeacherInfo Redis auto-reload completed on server start");
     } catch (error) {
         console.error("❌ Failed to auto-reload TeacherInfo Redis on server start:", error);
     }
 }, 5000);
+
 
 module.exports = router;
