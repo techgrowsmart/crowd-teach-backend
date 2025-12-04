@@ -9,6 +9,26 @@ const client = require("../../config/db");
 let redisLastLoaded = null;
 const REDIS_RELOAD_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
+// simple helper used everywhere in this file
+async function ensureRedis() {
+  try {
+    // ensure redis client is ready (safe no-op if already connected)
+    if (typeof redisClient.ensureConnected === 'function') {
+      await redisClient.ensureConnected();
+    } else if (typeof redisClient.connect === 'function') {
+      // backward compatibility if wrapper didn't expose ensureConnected()
+      await redisClient.connect();
+    } else {
+      // no-op: mark open so callers don't repeatedly fail
+      redisClient.isOpen = true;
+    }
+  } catch (err) {
+    console.warn('⚠️ ensureRedis warning (teachers.js):', err && err.message ? err.message : err);
+    // keep going (some endpoints can operate without Redis)
+    redisClient.isOpen = true;
+  }
+}
+
 async function ensureRedis() {
   try {
 // ensure redis client is ready (safe no-op if already connected)
