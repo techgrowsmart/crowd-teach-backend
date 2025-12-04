@@ -1282,7 +1282,7 @@ app.get("/", (req, res) => {
 
 
 const HOST = process.env.HOST
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
 server.listen(PORT, () => console.log(`🚀 Server running on http://${HOST}:${PORT}`));
 
 
