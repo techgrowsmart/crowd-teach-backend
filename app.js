@@ -13,7 +13,7 @@ const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
 
-const server = http.createServer(app);
+// const server = http.createServer(app);
 
 // Initialize MongoDB connection
 connectMongoDB().catch(err => {
