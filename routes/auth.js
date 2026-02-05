@@ -108,7 +108,7 @@ router.post("/verify-otp", async (req, res) => {
         }
 
 
-        const userQuery = "SELECT role FROM users WHERE email = ?";
+        const userQuery = "SELECT role, name FROM users WHERE email = ?";
         const userResult = await client.execute(userQuery, [email], { prepare: true });
 
         if (userResult.rowLength === 0) {
@@ -116,7 +116,11 @@ router.post("/verify-otp", async (req, res) => {
         }
 
         const user = userResult.rows[0];
-        const token = jwt.sign({email},process.env.JWT_SECRET_KEY,{expiresIn:'7d'})
+        const token = jwt.sign({
+            email: email,
+            role: user.role,
+            name: user.name
+        }, process.env.JWT_SECRET_KEY, {expiresIn:'7d'})
         res.json({
             message: "✅ OTP verified successfully",
             role: user.role,
@@ -126,6 +130,46 @@ router.post("/verify-otp", async (req, res) => {
         console.error("❌ Error verifying OTP:", error);
         res.status(500).json({ message: "Failed to verify OTP" });
     }
+});
+
+// Refresh token endpoint for existing users
+router.post('/refresh-token', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+    
+    // Get user info from Cassandra
+    const userQuery = "SELECT role, name FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(userQuery, [email], { prepare: true });
+    
+    if (userResult.rowLength === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    const user = userResult.rows[0];
+    
+    // Create new token with role and name
+    const token = jwt.sign({
+      email: email,
+      role: user.role,
+      name: user.name
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    
+    res.json({
+      success: true,
+      message: 'Token refreshed successfully',
+      role: user.role,
+      name: user.name,
+      token
+    });
+    
+  } catch (error) {
+    console.error("❌ Error refreshing token:", error);
+    res.status(500).json({ message: "Failed to refresh token" });
+  }
 });
 
 module.exports = router;

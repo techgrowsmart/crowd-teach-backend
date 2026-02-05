@@ -9,21 +9,28 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const verifyToken = require("./utils/verifyToken")
+const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
 
-// const server = http.createServer(app);
+const server = http.createServer(app);
+
+// Initialize MongoDB connection
+connectMongoDB().catch(err => {
+  console.error('❌ Failed to connect to MongoDB:', err);
+  process.exit(1);
+});
 // const options = {
 //   key: fs.readFileSync('/etc/letsencrypt/live/teachnteachprimaryserver.spiraldevs.com/privkey.pem'),      // Private key
 //   cert: fs.readFileSync('/etc/letsencrypt/live/teachnteachprimaryserver.spiraldevs.com/fullchain.pem'),  // Certificate chain
 // };
 // const server = https.createServer(options,app);
 // Use real cert files placed by acme.sh
-const options = {
-  key: fs.readFileSync('/home/ec2-user/certs/privkey.pem'),
-  cert: fs.readFileSync('/home/ec2-user/certs/fullchain.pem')
-};
-const server = https.createServer(options, app);
+// const options = {
+//   key: fs.readFileSync('/home/ec2-user/certs/privkey.pem'),
+//   cert: fs.readFileSync('/home/ec2-user/certs/fullchain.pem')
+// };
+// const server = https.createServer(options, app);
 
 
 const uploadDir = path.join(__dirname, "uploads");
@@ -156,6 +163,10 @@ app.use("/api", teacherInfoRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 
 app.use("/api/favorites", favoritesRoutes);
+
+// Posts/Thoughts routes - Using MongoDB
+const postsRoutes = require('./routes/posts-mongo');
+app.use("/api/posts", postsRoutes);
 
 // const client = new cassandra.Client({
 //
