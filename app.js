@@ -776,7 +776,7 @@ app.post("/api/upload",verifyToken, (req, res) => {
     }
 
     console.log("File uploaded successfully:", req.file);
-    const fileUrl = `http://${req.headers.host}/uploads/${req.file.filename}`;
+    const fileUrl = `https://${req.headers.host}/uploads/${req.file.filename}`;
     res.json({ url: fileUrl });
   });
 });

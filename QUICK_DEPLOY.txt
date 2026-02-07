@@ -1,0 +1,57 @@
+# EC2 DEPLOYMENT COMMANDS
+# Copy and paste these commands directly into your EC2 SSH terminal
+
+# 1. Navigate to home directory
+cd /home/ec2-user
+
+# 2. Stop existing processes
+pm2 stop all 2>/dev/null || true
+pm2 delete all 2>/dev/null || true
+pkill -f "node app.js" 2>/dev/null || true
+lsof -ti:443 | xargs kill -9 2>/dev/null || true
+
+# 3. Backup current version
+if [ -d "crowd-teach-gogrowsmart-backend" ]; then
+    cp -r crowd-teach-gogrowsmart-backend crowd-teach-gogrowsmart-backend-backup-$(date +%Y%m%d-%H%M%S)
+    rm -rf crowd-teach-gogrowsmart-backend
+fi
+
+# 4. Clone latest code
+git clone https://github.com/Scoder6/crowd-teach-gogrowsmart-backend.git
+cd crowd-teach-gogrowsmart-backend
+
+# 5. Install dependencies
+npm ci --production
+
+# 6. Setup SSL certificates
+mkdir -p /home/ec2-user/certs
+
+# Generate self-signed certificate if not exists
+if [ ! -f "/home/ec2-user/certs/privkey.pem" ] || [ ! -f "/home/ec2-user/certs/fullchain.pem" ]; then
+    echo "Generating SSL certificates..."
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /home/ec2-user/certs/privkey.pem \
+        -out /home/ec2-user/certs/fullchain.pem \
+        -subj "/C=US/ST=State/L=City/O=GoGrowSmart/CN=growsmartserver.gogrowsmart.com"
+fi
+
+# Set proper permissions
+chmod 600 /home/ec2-user/certs/privkey.pem
+chmod 644 /home/ec2-user/certs/fullchain.pem
+
+# 7. Start the application
+pm2 start app.js --name backend
+
+# 8. Save PM2 configuration
+pm2 save
+pm2 startup
+
+# 9. Wait and test
+sleep 10
+echo "Checking server status..."
+pm2 status
+
+# 10. Test server
+curl -k https://localhost:443/api/ping
+
+echo "Deployment completed! Server should be accessible at: https://growsmartserver.gogrowsmart.com"

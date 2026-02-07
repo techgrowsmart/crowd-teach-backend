@@ -132,7 +132,7 @@ async function ensureRedis() {
 
         const processTeacher = (teacher) => {
             teacher.profilePic =
-                teacher.profilepic || `http://${req.headers.host}/uploads/default-profile.png`;
+                teacher.profilepic || `https://${req.headers.host}/uploads/default-profile.png`;
             return teacher;
         };
 
