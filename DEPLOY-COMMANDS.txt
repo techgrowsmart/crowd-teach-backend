@@ -1,0 +1,51 @@
+# EC2 DEPLOYMENT COMMANDS
+# Copy and paste these commands directly into your EC2 SSH terminal
+
+# 1. SSH into your EC2 instance:
+# ssh -i your-key.pem ec2-user@16.171.57.134
+
+# 2. Update system and install dependencies:
+sudo yum update -y
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo yum install -y nodejs
+sudo npm install -g pm2
+
+# 3. Setup firewall:
+sudo yum install -y firewalld
+sudo systemctl start firewalld
+sudo systemctl enable firewalld
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --permanent --add-port=443/tcp
+sudo firewall-cmd --reload
+
+# 4. Create directories:
+sudo mkdir -p /home/ec2-user/certs
+sudo chown -R ec2-user:ec2-user /home/ec2-user/certs
+
+# 5. Clone and setup application:
+cd /home/ec2-user
+git clone https://github.com/Scoder6/crowd-teach-gogrowsmart-backend.git
+cd crowd-teach-gogrowsmart-backend
+
+# 6. Install dependencies:
+npm ci --production
+
+# 7. ADD YOUR SSL CERTIFICATES:
+# Copy your privkey.pem and fullchain.pem to /home/ec2-user/certs/
+# Example: scp -i your-key.pem privkey.pem ec2-user@16.171.57.134:/home/ec2-user/certs/
+# Example: scp -i your-key.pem fullchain.pem ec2-user@16.171.57.134:/home/ec2-user/certs/
+
+# 8. Start application:
+pm2 start app.js --name backend
+pm2 save
+pm2 startup
+
+# 9. Check status:
+pm2 status
+pm2 logs backend
+
+# 10. Test the backend:
+curl https://growsmartserver.gogrowsmart.com/api/ping
+
+# Your backend will be available at: https://growsmartserver.gogrowsmart.com/
