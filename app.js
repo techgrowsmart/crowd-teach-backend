@@ -13,8 +13,7 @@ const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
 
-// HTTP Server for Nginx proxy
-const server = http.createServer(app);
+// const server = http.createServer(app);
 
 // Initialize MongoDB connection
 connectMongoDB().catch(err => {
@@ -27,11 +26,11 @@ connectMongoDB().catch(err => {
 // };
 // const server = https.createServer(options,app);
 // Use real cert files placed by acme.sh
-// const options = {
-//   key: fs.readFileSync('/home/ec2-user/certs/privkey.pem'),
-//   cert: fs.readFileSync('/home/ec2-user/certs/fullchain.pem')
-// };
-// const server = https.createServer(options, app);
+const options = {
+  key: fs.readFileSync('/home/ec2-user/certs/privkey.pem'),
+  cert: fs.readFileSync('/home/ec2-user/certs/fullchain.pem')
+};
+const server = https.createServer(options, app);
 
 
 const uploadDir = path.join(__dirname, "uploads");
@@ -1293,9 +1292,9 @@ app.get("/", (req, res) => {
 });
 
 
-const HOST = process.env.HOST || '127.0.0.1'
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, HOST, () => console.log(`🚀 Server running on http://${HOST}:${PORT}`));
+const HOST = process.env.HOST || '0.0.0.0'
+const PORT = process.env.PORT || 443;
+server.listen(PORT, HOST, () => console.log(`🚀 Server running on https://${HOST}:${PORT}`));
 
 
 module.exports = app;
