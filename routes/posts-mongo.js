@@ -104,33 +104,6 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
       });
     }
 
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️ MongoDB not connected, creating mock post');
-      
-      const postId = uuidv4();
-      const postImage = req.file ? `/uploads/${req.file.filename}` : null;
-      const tagsArray = tags ? tags.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
-
-      // Return mock success response
-      return res.status(201).json({
-        success: true,
-        message: 'Post created successfully (mock data - MongoDB not connected)',
-        data: {
-          id: postId,
-          author_email: userEmail,
-          author_name: userEmail.split('@')[0],
-          author_role: userRole,
-          author_profile_pic: '',
-          content: content.trim(),
-          post_image: postImage,
-          likes: 0,
-          created_at: new Date().toISOString(),
-          tags: tagsArray
-        }
-      });
-    }
-
     // Get user profile information
     const userProfile = await getUserProfile(userEmail);
     if (!userProfile) {
@@ -181,30 +154,9 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
 
   } catch (error) {
     console.error('❌ Error creating post:', error);
-    
-    // Return mock success response on error
-    const postId = uuidv4();
-    const { content, tags } = req.body;
-    const userEmail = req.user.email;
-    const userRole = req.user.role || 'Unknown';
-    const postImage = req.file ? `/uploads/${req.file.filename}` : null;
-    const tagsArray = tags ? tags.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
-
-    res.status(201).json({
-      success: true,
-      message: 'Post created successfully (fallback - MongoDB connection issue)',
-      data: {
-        id: postId,
-        author_email: userEmail,
-        author_name: userEmail.split('@')[0],
-        author_role: userRole,
-        author_profile_pic: '',
-        content: content?.trim() || 'Sample content',
-        post_image: postImage,
-        likes: 0,
-        created_at: new Date().toISOString(),
-        tags: tagsArray
-      }
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create post'
     });
   }
 });
@@ -213,141 +165,6 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
 router.get('/all', verifyToken, async (req, res) => {
   try {
     const userEmail = req.user.email;
-    
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState !== 1) {
-      console.log('⚠️ MongoDB not connected, returning sample data');
-      
-      // Return realistic sample data when MongoDB is not connected
-      const samplePosts = [
-        {
-          id: 'post-001',
-          author: {
-            email: 'sarah.johnson@gogrowsmart.com',
-            name: 'Sarah Johnson',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/women/1.jpg'
-          },
-          content: 'Just completed an amazing physics lesson on quantum mechanics! My students were so engaged with the interactive demonstrations. 🚀',
-          postImage: '',
-          likes: 24,
-          createdAt: new Date(Date.now() - 1800000).toISOString(),
-          tags: ['physics', 'quantum', 'interactive'],
-          isLiked: false
-        },
-        {
-          id: 'post-002',
-          author: {
-            email: 'michael.chen@gogrowsmart.com',
-            name: 'Michael Chen',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/men/2.jpg'
-          },
-          content: 'Today we explored renewable energy sources in our environmental science class. The students built working solar panel models! ☀️',
-          postImage: '',
-          likes: 18,
-          createdAt: new Date(Date.now() - 3600000).toISOString(),
-          tags: ['environmental', 'science', 'renewable'],
-          isLiked: false
-        },
-        {
-          id: 'post-003',
-          author: {
-            email: 'emily.davis@gogrowsmart.com',
-            name: 'Emily Davis',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/women/3.jpg'
-          },
-          content: 'Mathematics can be fun! Used gamification to teach complex algebraic concepts. The students loved the competitive spirit! 🎮',
-          postImage: '',
-          likes: 31,
-          createdAt: new Date(Date.now() - 5400000).toISOString(),
-          tags: ['mathematics', 'gamification', 'algebra'],
-          isLiked: false
-        },
-        {
-          id: 'post-004',
-          author: {
-            email: 'robert.wilson@gogrowsmart.com',
-            name: 'Robert Wilson',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/men/4.jpg'
-          },
-          content: 'Field trip to the local science museum was a huge success! Students got hands-on experience with real fossils. 🦕',
-          postImage: '',
-          likes: 15,
-          createdAt: new Date(Date.now() - 7200000).toISOString(),
-          tags: ['field-trip', 'science', 'museum', 'fossils'],
-          isLiked: false
-        },
-        {
-          id: 'post-005',
-          author: {
-            email: 'lisa.anderson@gogrowsmart.com',
-            name: 'Lisa Anderson',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/women/5.jpg'
-          },
-          content: 'Started coding club after school! Teaching students Python and web development. Future programmers in the making! 💻',
-          postImage: '',
-          likes: 42,
-          createdAt: new Date(Date.now() - 9000000).toISOString(),
-          tags: ['coding', 'python', 'programming', 'club'],
-          isLiked: false
-        },
-        {
-          id: 'post-006',
-          author: {
-            email: 'james.taylor@gogrowsmart.com',
-            name: 'James Taylor',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/men/6.jpg'
-          },
-          content: 'Literature circle discussion on "To Kill a Mockingbird" was incredible. Students shared deep insights and perspectives! 📚',
-          postImage: '',
-          likes: 27,
-          createdAt: new Date(Date.now() - 10800000).toISOString(),
-          tags: ['literature', 'discussion', 'mockingbird'],
-          isLiked: false
-        },
-        {
-          id: 'post-007',
-          author: {
-            email: 'maria.garcia@gogrowsmart.com',
-            name: 'Maria Garcia',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/women/7.jpg'
-          },
-          content: 'Art project: Students created beautiful mandala designs representing cultural diversity. So much creativity! 🎨',
-          postImage: '',
-          likes: 19,
-          createdAt: new Date(Date.now() - 12600000).toISOString(),
-          tags: ['art', 'culture', 'mandala', 'creativity'],
-          isLiked: false
-        },
-        {
-          id: 'post-008',
-          author: {
-            email: 'david.lee@gogrowsmart.com',
-            name: 'David Lee',
-            role: 'teacher',
-            profile_pic: 'https://randomuser.me/api/portraits/men/8.jpg'
-          },
-          content: 'Chemistry experiment: Created elephant toothpaste demonstration! Students learned about chemical reactions in a fun way. 🧪',
-          postImage: '',
-          likes: 33,
-          createdAt: new Date(Date.now() - 14400000).toISOString(),
-          tags: ['chemistry', 'experiment', 'elephant-toothpaste'],
-          isLiked: false
-        }
-      ];
-
-      return res.json({
-        success: true,
-        data: samplePosts
-      });
-    }
-
     const posts = await Post.find({})
       .sort({ created_at: -1 })
       .lean();
@@ -381,44 +198,9 @@ router.get('/all', verifyToken, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error fetching posts:', error);
-    
-    // Return realistic sample data on error
-    const samplePosts = [
-      {
-        id: 'fallback-001',
-        author: {
-          email: 'admin@gogrowsmart.com',
-          name: 'System Admin',
-          role: 'admin',
-          profile_pic: 'https://randomuser.me/api/portraits/admin.jpg'
-        },
-        content: '🔧 System Notice: Database temporarily unavailable. Showing cached posts while we resolve connectivity issues. All features remain functional!',
-        postImage: '',
-        likes: 99,
-        createdAt: new Date(Date.now() - 60000).toISOString(),
-        tags: ['system', 'notice', 'database'],
-        isLiked: false
-      },
-      {
-        id: 'fallback-002',
-        author: {
-          email: 'support@gogrowsmart.com',
-          name: 'Support Team',
-          role: 'support',
-          profile_pic: 'https://randomuser.me/api/portraits/support.jpg'
-        },
-        content: '📱 Mobile App Update: New features added including Indian states support, improved performance, and enhanced user experience. Thank you for your patience!',
-        postImage: '',
-        likes: 45,
-        createdAt: new Date(Date.now() - 120000).toISOString(),
-        tags: ['update', 'mobile', 'features'],
-        isLiked: false
-      }
-    ];
-
-    res.json({
-      success: true,
-      data: samplePosts
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch posts'
     });
   }
 });
