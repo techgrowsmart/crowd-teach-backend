@@ -89,7 +89,7 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
 
     try {
         // First get basic user info from users table
-        const userQuery = "SELECT id, name, role, profileimage FROM users WHERE email = ? ALLOW FILTERING";
+        const userQuery = "SELECT id, name, role, profileimage, status, created_at FROM users WHERE email = ? ALLOW FILTERING";
         const userResult = await cassandraClient.execute(userQuery, [email], { prepare: true });
 
         if (userResult.rowLength === 0) {
@@ -117,6 +117,8 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
             role: user.role || "",
             profileimage: user.profileimage || "",
             profilePic: user.profileimage || "",
+            status: user.status || 'dormant', // Include status with default fallback
+            created_at: user.created_at, // Include created_at timestamp
             introduction: "",
             qualifications: [],
             category: "Subject teacher",
@@ -170,6 +172,8 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
                 role: user.role || "",
                 profileimage: teacher.profilepic || user.profileimage || "",
                 profilePic: teacher.profilepic || user.profileimage || "",
+                status: user.status || 'dormant', // Include status with default fallback
+                created_at: user.created_at, // Include created_at timestamp
                 introduction: teacher.introduction || "",
                 qualifications: Array.isArray(qualifications) ? qualifications : [],
                 category: teacher.category || "Subject teacher",
@@ -186,7 +190,7 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
             teacherData.heighest_degree = tutorResult.rows[0].heighest_degree || "";
         }
 
-        console.log("Teacher profile data:", teacherData);
+        console.log("Teacher profile data:", JSON.stringify(teacherData, null, 2));
         return res.status(200).json(teacherData);
 
     } catch (error) {

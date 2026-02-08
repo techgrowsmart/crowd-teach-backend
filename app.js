@@ -12,25 +12,31 @@ const verifyToken = require("./utils/verifyToken")
 const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
-
-// const httpServer = https.createServer(app);
-
 // Initialize MongoDB connection
 connectMongoDB().catch(err => {
   console.error('❌ Failed to connect to MongoDB:', err);
   process.exit(1);
 });
-// const options = {
-//   key: fs.readFileSync('/etc/letsencrypt/live/teachnteachprimaryserver.spiraldevs.com/privkey.pem'),      // Private key
-//   cert: fs.readFileSync('/etc/letsencrypt/live/teachnteachprimaryserver.spiraldevs.com/fullchain.pem'),  // Certificate chain
-// };
-// const server = https.createServer(options,app);
-// Use real cert files placed by acme.sh
-const options = {
-  key: fs.readFileSync('/app/certs/privkey.pem'),
-  cert: fs.readFileSync('/app/certs/fullchain.pem')
-};
-const httpServer = https.createServer(options, app);
+
+// Production-ready SSL configuration
+let httpServer;
+
+// Check if we're in production and have SSL certificates
+if (process.env.NODE_ENV === 'production' && fs.existsSync('./certs/privkey.pem') && fs.existsSync('./certs/fullchain.pem')) {
+  const options = {
+    key: fs.readFileSync('./certs/privkey.pem'),
+    cert: fs.readFileSync('./certs/fullchain.pem')
+  };
+  httpServer = https.createServer(options, app);
+  console.log('🔒 HTTPS server configured with SSL certificates');
+} else {
+  httpServer = http.createServer(app);
+  if (process.env.NODE_ENV === 'production') {
+    console.log('⚠️  Production mode but no SSL certificates found, falling back to HTTP');
+  } else {
+    console.log('🔓 Development mode: HTTP server');
+  }
+}
 
 
 const uploadDir = path.join(__dirname, "uploads");
@@ -1292,9 +1298,15 @@ app.get("/", (req, res) => {
 });
 
 
-const HOST = process.env.HOST || '0.0.0.0'
-const PORT = process.env.PORT || 443;
-httpServer.listen(PORT, HOST, () => console.log(`🚀 Server running on https://${HOST}:${PORT}`));
+const HOST = process.env.HOST || '0.0.0.0';
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 443 : 3000);
+const PROTOCOL = process.env.NODE_ENV === 'production' && httpServer instanceof https.Server ? 'https' : 'http';
+
+httpServer.listen(PORT, HOST, () => {
+  console.log(`🚀 Server running on ${PROTOCOL}://${HOST}:${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 API Base URL: ${PROTOCOL}://${HOST}:${PORT}`);
+});
 
 
 module.exports = app;
