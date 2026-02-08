@@ -27,8 +27,8 @@ connectMongoDB().catch(err => {
 // const server = https.createServer(options,app);
 // Use real cert files placed by acme.sh
 const options = {
-  key: fs.readFileSync('/home/ec2-user/certs/privkey.pem'),
-  cert: fs.readFileSync('/home/ec2-user/certs/fullchain.pem')
+  key: fs.readFileSync('/app/certs/privkey.pem'),
+  cert: fs.readFileSync('/app/certs/fullchain.pem')
 };
 const httpServer = https.createServer(options, app);
 
