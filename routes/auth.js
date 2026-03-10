@@ -45,6 +45,25 @@ router.post("/login", async (req, res) => {
             });
         }
 
+        // 🧪 Bypass OTP for test users (Google Play Console testing)
+        const testUsers = ["student1@example.com", "teacher56@example.com"];
+        if (testUsers.includes(email)) {
+            console.log(`🧪 Test user detected: ${email} - Bypassing OTP`);
+            const token = jwt.sign({
+                email: email,
+                role: user.role,
+                name: user.name
+            }, process.env.JWT_SECRET_KEY, {expiresIn:'7d'});
+            
+            return res.json({
+                message: "✅ Login successful (test user)",
+                role: user.role,
+                token,
+                name: user.name,
+                isTestUser: true
+            });
+        }
+
         // ✅ Continue with OTP generation
         const otp = generateOTP();
         const otpId = uuidv4();

@@ -12,10 +12,36 @@ const verifyToken = require("./utils/verifyToken")
 const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
+// Import optimizations
+const rateLimiter = require('./middleware/rateLimiter');
+const timeout = require('./middleware/timeout');
+const { initializeOptimizedDB } = require('./config/db-optimized');
+
+// Apply global middleware
+app.use(rateLimiter.generalLimiter);
+app.use(timeout.requestTimeout(30000)); // 30 second timeout
+app.use(cors());
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Performance monitoring
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`📊 ${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
+  });
+  
+  next();
+});
+
 // Initialize MongoDB connection
 connectMongoDB().catch(err => {
   console.error('❌ Failed to connect to MongoDB:', err);
-  process.exit(1);
+  if (process.env.SKIP_MONGO !== 'true') {
+    process.exit(1);
+  }
 });
 
 // Production-ready SSL configuration
@@ -132,6 +158,7 @@ const teacherInfoRoutes = require("./routes/students/teacherInfo.js"); //for tea
 const valuesToselect = require("./routes/boardsValues")
 const review = require('./routes/students/review')
 const favoritesRoutes = require("./routes/favorites");
+const testAuthRoutes = require('./routes/test-auth');
 const {v4: uuidv4} = require("uuid");
 const multerS3 = require("multer-s3");
 const s3 = require("./config/s3");
@@ -156,7 +183,7 @@ app.use("/api",messages)
 app.use("/api",myTutors)
 app.use('/api/payments', paymentRoutes);
 app.use("/api",walletBalence)
-app.use("/api",review)
+app.use("/api/review",review)
 
 app.use("/api",connectionRequest)
 app.use("/api",addonClass)
@@ -169,10 +196,15 @@ app.use("/api", teacherInfoRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 
 app.use("/api/favorites", favoritesRoutes);
+app.use("/api/test-auth", testAuthRoutes);
 
 // Posts/Thoughts routes - Using MongoDB
 const postsRoutes = require('./routes/posts-mongo');
 app.use("/api/posts", postsRoutes);
+
+// User profile routes - Using AstraDB
+const userProfileRoutes = require('./routes/userProfile');
+app.use("/api/userProfile", userProfileRoutes);
 
 // const client = new cassandra.Client({
 //
