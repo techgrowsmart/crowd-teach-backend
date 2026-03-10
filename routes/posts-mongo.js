@@ -38,7 +38,7 @@ const upload = multer({
 // Helper function to get user profile information
 async function getUserProfile(email) {
   try {
-    // Create User schema if not exists
+    // First try to get from MongoDB users collection
     const UserSchema = new mongoose.Schema({
       email: { type: String, required: true, unique: true },
       name: { type: String, required: true },
@@ -51,30 +51,46 @@ async function getUserProfile(email) {
     const user = await User.findOne({ email: email });
     
     if (user) {
+      console.log('✅ Found user in MongoDB:', { email, name: user.name, profileImage: user.profileImage });
       return {
         name: user.name,
         profile_pic: user.profileImage || ''
       };
     }
     
-    // Fallback for teachers - check teachers collection
-    const TeacherSchema = new mongoose.Schema({
-      email: { type: String, required: true, unique: true },
-      name: { type: String, required: true },
-      profilePic: { type: String, default: '' }
-    }, { collection: 'teachers1' });
+    // If not found in MongoDB, try to get from Cassandra for teachers
+    const cassandraClient = require('../config/db');
     
-    const Teacher = mongoose.models.Teacher || mongoose.model('Teacher', TeacherSchema);
-    const teacher = await Teacher.findOne({ email: email });
+    // Try teachers1 table first
+    const teacherQuery = "SELECT name, profilepic FROM teachers1 WHERE email = ? ALLOW FILTERING";
+    const teacherResult = await cassandraClient.execute(teacherQuery, [email], { prepare: true });
     
-    if (teacher) {
+    if (teacherResult.rowLength > 0) {
+      const teacher = teacherResult.rows[0];
+      const profilePic = teacher.profilepic || '';
+      console.log('✅ Found teacher in Cassandra teachers1:', { email, name: teacher.name, profilePic });
       return {
-        name: teacher.name,
-        profile_pic: teacher.profilePic || ''
+        name: teacher.name || email.split('@')[0],
+        profile_pic: profilePic
+      };
+    }
+    
+    // Try users table in Cassandra
+    const userQuery = "SELECT name, profileimage FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await cassandraClient.execute(userQuery, [email], { prepare: true });
+    
+    if (userResult.rowLength > 0) {
+      const cassandraUser = userResult.rows[0];
+      const profileImage = cassandraUser.profileimage || '';
+      console.log('✅ Found user in Cassandra users:', { email, name: cassandraUser.name, profileImage });
+      return {
+        name: cassandraUser.name || email.split('@')[0],
+        profile_pic: profileImage
       };
     }
     
     // Final fallback - extract name from email
+    console.log('⚠️ Using fallback name from email:', email);
     return {
       name: email.split('@')[0],
       profile_pic: ''
@@ -468,11 +484,16 @@ router.get('/:postId/likes', verifyToken, async (req, res) => {
       .lean();
 
     // Format likes with user details
-    const formattedLikes = likes.map(like => ({
-      user_email: like.user_email,
-      user_name: like.user_email.split('@')[0], // Extract name from email
-      user_profile_pic: '', // Can be enhanced later
-      liked_at: like.liked_at
+    const formattedLikes = await Promise.all(likes.map(async (like) => {
+      // Get user profile information for each like
+      const userProfile = await getUserProfile(like.user_email);
+      
+      return {
+        user_email: like.user_email,
+        user_name: userProfile.name,
+        user_profile_pic: userProfile.profile_pic,
+        liked_at: like.liked_at
+      };
     }));
 
     res.json({

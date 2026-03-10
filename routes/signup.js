@@ -77,71 +77,81 @@ router.post("/signup", async (req, res) => {
 
         res.json({ message: "✅ OTP sent successfully", otpId });
     } catch (error) {
-        console.error("❌ Error sending OTP:", error.message);
-        res.status(500).json({ message: "Failed to send OTP" });
+        console.error("❌ Signup error:", error);
+        res.status(500).json({ message: "❌ Internal server error" });
     }
 });
 
-router.post("/signup/verify-otp", async (req, res) => {
+router.post("/signup/verify-otp", rateLimiter.otpLimiter, rateLimiter.concurrentLimiter(3), async (req, res) => {
+    const startTime = Date.now();
+    
     try {
         const { email, otp, name, phonenumber } = req.body;
-
-        if (!email || !otp || !name || !phonenumber) {
-            return res.status(400).json({
-                message: "❌ Email, OTP, Full Name, and Phone Number are required",
-            });
+        if (!email || !otp || !name) {
+            return res.status(400).json({ message: "❌ Email, OTP, and name are required" });
         }
 
-        // Check if already registered
-        const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
-        const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
+        console.log(`🔍 OTP verification for: ${email}`);
 
-        if (userResult.rowLength > 0) {
-            if (userResult.rows[0].status === "active") {
-                return res.status(400).json({
-                    message: "❌ This email is already registered. Please login instead.",
-                    alreadyRegistered: true,
-                });
-            }
+        // Get latest OTP - OPTIMIZED with proper ordering
+        const getOTPQuery = "SELECT otp, expires_at FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1";
+        const otpResult = await client.execute(getOTPQuery, [email], { prepare: true });
+
+        if (otpResult.rowLength === 0) {
+            return res.status(400).json({ message: "❌ OTP not found or expired" });
         }
 
-        const query = "SELECT * FROM otp_table WHERE email = ? ALLOW FILTERING";
-        const result = await client.execute(query, [email], { prepare: true });
-
-        if (result.rowLength === 0) {
-            return res.status(400).json({ message: "❌ OTP not found or invalid email" });
-        }
-
-        const latestOTP = result.rows.sort((a, b) => new Date(b.expires_at) - new Date(a.expires_at))[0];
-        console.log("otp",latestOTP)
-        if (latestOTP.otp.toString() !== otp.toString()) {
-            return res.status(400).json({ message: "❌ Incorrect OTP" });
-        }
-
-        if (new Date(latestOTP.expires_at) < new Date()) {
+        const latestOTP = otpResult.rows[0];
+        
+        // Check if OTP has expired
+        if (latestOTP.expires_at && new Date(latestOTP.expires_at) < new Date()) {
             return res.status(400).json({ message: "❌ OTP has expired" });
         }
 
-        // ✅ Insert user
-        const userId = uuidv4();
-        const now = new Date();
-        const createUserQuery = `
-      INSERT INTO users (id, email, name, phonenumber, created_at)
-      VALUES (?, ?, ?, ?, ?)
-    `;
-        await client.execute(createUserQuery, [userId, email, name, phonenumber, now], { prepare: true });
+        if (latestOTP.otp !== otp) {
+            return res.status(400).json({ message: "❌ Invalid OTP" });
+        }
 
-        //Delete OTP
-        const deleteQuery = "DELETE FROM otp_table WHERE email = ? AND id = ?";
-        await client.execute(deleteQuery, [email, latestOTP.id], { prepare: true });
-        const token = jwt.sign({email},process.env.JWT_SECRET_KEY,{expiresIn:'7d'})
-        return res.json({ message: "✅ OTP verified and user created successfully",token ,userId});
+        // Generate user ID
+        const userId = uuidv4();
+
+        // Insert user - OPTIMIZED
+        const insertUserQuery = "INSERT INTO users (id, email, name, phonenumber, role, status, created_at) VALUES (?, ?, ?, ?, 'student', 'active', toTimestamp(now()))";
+        await client.execute(insertUserQuery, [userId, email, name, phonenumber], { prepare: true });
+
+        // Insert student record - OPTIMIZED
+        const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')"; // Default class year
+        await client.execute(insertStudentQuery, [email, name], { prepare: true });
+
+        // Delete OTP - OPTIMIZED
+        const deleteOTPQuery = "DELETE FROM otp_table WHERE email = ? AND id = (SELECT id FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1)";
+        await client.execute(deleteOTPQuery, [email, email], { prepare: true });
+
+        // Generate JWT token
+        const token = jwt.sign({
+            email: email,
+            role: 'student',
+            name: name
+        }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+
+        // Invalidate any cached data for this email
+        await cache.invalidateUser(email);
+
+        console.log(`✅ User created successfully: ${email}`);
+
+        const responseTime = Date.now() - startTime;
+        res.json({
+            message: "✅ Account created successfully",
+            token: token,
+            userId: userId,
+            responseTime: responseTime
+        });
+
     } catch (error) {
-        console.error("❌ Error verifying OTP:", error.message);
-        return res.status(500).json({ message: "Failed to verify OTP" });
+        console.error("❌ OTP verification error:", error);
+        res.status(500).json({ message: "❌ Internal server error" });
     }
 });
-
 
 router.post(
     "/register",

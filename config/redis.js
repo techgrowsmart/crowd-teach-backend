@@ -3,6 +3,7 @@
  * Minimal, robust node-redis wrapper.
  * - Uses REDIS_URL (default: redis://127.0.0.1:6379)
  * - Exports: connect(), ensureConnected(), quit(), isOpen, lLen, lPop, rPush, del, keys, raw()
+ * - Added caching utilities for rate limiting and performance optimization
  *
  * This file intentionally never lets callers crash when connect() is absent.
  */
@@ -115,6 +116,89 @@ const redisWrapper = {
     const client = await _initClient();
     if (!client) return [];
     return await client.keys(pattern);
+  },
+
+  // New caching utilities for rate limiting and performance
+  get: async function (key) {
+    const client = await _initClient();
+    if (!client) return null;
+    try {
+      const value = await client.get(key);
+      return value ? JSON.parse(value) : null;
+    } catch (e) {
+      console.error('Redis get error:', e);
+      return null;
+    }
+  },
+
+  set: async function (key, value) {
+    const client = await _initClient();
+    if (!client) return;
+    try {
+      return await client.set(key, JSON.stringify(value));
+    } catch (e) {
+      console.error('Redis set error:', e);
+      return null;
+    }
+  },
+
+  setex: async function (key, seconds, value) {
+    const client = await _initClient();
+    if (!client) return;
+    try {
+      return await client.setEx(key, seconds, JSON.stringify(value));
+    } catch (e) {
+      console.error('Redis setex error:', e);
+      return null;
+    }
+  },
+
+  incr: async function (key, ttl = 300) {
+    const client = await _initClient();
+    if (!client) return 0;
+    try {
+      const result = await client.incr(key);
+      if (result === 1 && ttl > 0) {
+        await client.expire(key, ttl);
+      }
+      return result;
+    } catch (e) {
+      console.error('Redis incr error:', e);
+      return 0;
+    }
+  },
+
+  expire: async function (key, seconds) {
+    const client = await _initClient();
+    if (!client) return false;
+    try {
+      return await client.expire(key, seconds);
+    } catch (e) {
+      console.error('Redis expire error:', e);
+      return false;
+    }
+  },
+
+  ping: async function () {
+    const client = await _initClient();
+    if (!client) return 'PONG';
+    try {
+      return await client.ping();
+    } catch (e) {
+      console.error('Redis ping error:', e);
+      return 'PONG';
+    }
+  },
+
+  info: async function (section) {
+    const client = await _initClient();
+    if (!client) return '';
+    try {
+      return await client.info(section);
+    } catch (e) {
+      console.error('Redis info error:', e);
+      return '';
+    }
   },
 
   raw: function () {
