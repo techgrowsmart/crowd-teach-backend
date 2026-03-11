@@ -141,6 +141,11 @@ request_logger_simulation_test.spec.js
 *.swo
 *~
 
+# Service account keys (NEVER commit these)
+serviceAccountKey.json
+**/serviceAccountKey.json
+*.json
+
 # OS generated files
 .DS_Store
 .DS_Store?
