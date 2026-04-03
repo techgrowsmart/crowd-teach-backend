@@ -2,6 +2,7 @@ const express = require("express");
 const { v4: uuidv4 } = require("uuid");
 const nodemailer = require("nodemailer");
 const cassandra = require("cassandra-driver");
+const rateLimiter = require("../middleware/rateLimiter");
 
 const router = express.Router();
 const client = require("../config/db");
@@ -26,21 +27,31 @@ const upload = multer({
     })
 });
 
-
+// Generate OTP
 const generateOTP = () => Math.floor(1000 + Math.random() * 9000).toString();
 
+const toTimestamp = () => new Date().toISOString();
 
+// Signup route
 router.post("/signup", async (req, res) => {
     try {
-        const { fullName,phonenumber,email } = req.body;
+        const { fullName, phonenumber, email, role = 'student' } = req.body;
+        
+        // Validation
         if (!email) return res.status(400).json({ message: "❌ Email is required" });
-        if (!fullName) return  res.status(400).json({message:"❌ Full Name is required"})
-        if (!phonenumber) return  res.status(400).json({message:"❌ Phone Number is required"})
+        if (!fullName) return res.status(400).json({ message: "❌ Full Name is required" });
+        if (!phonenumber) return res.status(400).json({ message: "❌ Phone Number is required" });
+        
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
+        // Validate role
+        if (!role || !['student', 'teacher'].includes(role)) {
+            return res.status(400).json({ message: "❌ Invalid role. Must be 'student' or 'teacher'" });
+        }
 
+        // Check if user already exists
         try {
             const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
             const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
@@ -57,44 +68,54 @@ router.post("/signup", async (req, res) => {
             console.error("Error checking user:", checkError);
         }
 
+        // Generate OTP
         const otp = generateOTP();
-        console.log("otp",otp)
+        console.log("Generated OTP for:", email);
         const otpId = uuidv4();
         const expirationTime = new Date(Date.now() + 2 * 60 * 1000);
 
-        const query = "INSERT INTO otp_table (id, email, otp, expires_at) VALUES (?, ?, ?, ?)";
-        const params = [otpId, email, otp, expirationTime];
+        // Store OTP
+        const query = "INSERT INTO otp_table (id, email, otp, expires_at, user_data) VALUES (?, ?, ?, ?, ?)";
+        const userData = JSON.stringify({ fullName, phonenumber, role });
+        const params = [otpId, email, otp, expirationTime, userData];
         await client.execute(query, params, { prepare: true });
 
+        // Send OTP email
         const mailOptions = {
             from: `Your App <${process.env.EMAIL_USER}>`,
             to: email,
             subject: "Your OTP Code",
-            text: `Your OTP code is: ${otp}. It is valid for 2 minutes.`,
+            text: `Your OTP code is: ${otp}. It is valid for 2 minutes.\n\nAccount Details:\nName: ${fullName}\nPhone: ${phonenumber}\nRole: ${role}`,
         };
 
         await transporter.sendMail(mailOptions);
 
-        res.json({ message: "✅ OTP sent successfully", otpId });
+        res.json({ 
+            message: "✅ OTP sent successfully", 
+            otpId,
+            userData: { fullName, phonenumber, email, role }
+        });
     } catch (error) {
         console.error("❌ Signup error:", error);
         res.status(500).json({ message: "❌ Internal server error" });
     }
 });
 
-router.post("/signup/verify-otp", rateLimiter.otpLimiter, rateLimiter.concurrentLimiter(3), async (req, res) => {
+// Verify OTP route
+// Verify OTP route
+router.post("/signup/verify-otp", /* rateLimiter.otpLimiter, rateLimiter.concurrentLimiter(3), */ async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { email, otp, name, phonenumber } = req.body;
-        if (!email || !otp || !name) {
-            return res.status(400).json({ message: "❌ Email, OTP, and name are required" });
+        const { email, otp } = req.body;
+        if (!email || !otp) {
+            return res.status(400).json({ message: "❌ Email and OTP are required" });
         }
 
         console.log(`🔍 OTP verification for: ${email}`);
 
-        // Get latest OTP - OPTIMIZED with proper ordering
-        const getOTPQuery = "SELECT otp, expires_at FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1";
+        // Get latest OTP with user data
+        const getOTPQuery = "SELECT otp, expires_at, user_data FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1";
         const otpResult = await client.execute(getOTPQuery, [email], { prepare: true });
 
         if (otpResult.rowLength === 0) {
@@ -112,41 +133,57 @@ router.post("/signup/verify-otp", rateLimiter.otpLimiter, rateLimiter.concurrent
             return res.status(400).json({ message: "❌ Invalid OTP" });
         }
 
+        // Extract user data from OTP
+        let userData;
+        try {
+            userData = JSON.parse(latestOTP.user_data);
+        } catch (parseError) {
+            console.error("Error parsing user data:", parseError);
+            return res.status(400).json({ message: "❌ Invalid user data" });
+        }
+
+        const { fullName, phonenumber, role } = userData;
+
         // Generate user ID
         const userId = uuidv4();
 
-        // Insert user - OPTIMIZED
-        const insertUserQuery = "INSERT INTO users (id, email, name, phonenumber, role, status, created_at) VALUES (?, ?, ?, ?, 'student', 'active', toTimestamp(now()))";
-        await client.execute(insertUserQuery, [userId, email, name, phonenumber], { prepare: true });
+        // Insert user with correct role
+        const insertUserQuery = "INSERT INTO users (id, email, name, phonenumber, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)";
+        await client.execute(insertUserQuery, [userId, email, fullName, phonenumber, role, toTimestamp()], { prepare: true });
 
-        // Insert student record - OPTIMIZED
-        const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')"; // Default class year
-        await client.execute(insertStudentQuery, [email, name], { prepare: true });
+        // Insert role-specific record
+        if (role === 'student') {
+            const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')";
+            await client.execute(insertStudentQuery, [email, fullName], { prepare: true });
+        } else if (role === 'teacher') {
+            const insertTeacherQuery = "INSERT INTO tutors (id, email, full_name, phone_number, status, created_at) VALUES (?, ?, ?, 'pending', ?)";
+            await client.execute(insertTeacherQuery, [userId, email, fullName, phonenumber, toTimestamp()], { prepare: true });
+        }
 
-        // Delete OTP - OPTIMIZED
+        // Delete OTP
         const deleteOTPQuery = "DELETE FROM otp_table WHERE email = ? AND id = (SELECT id FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1)";
         await client.execute(deleteOTPQuery, [email, email], { prepare: true });
 
         // Generate JWT token
         const token = jwt.sign({
             email: email,
-            role: 'student',
-            name: name
+            role: role,
+            name: fullName
         }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
 
         // Invalidate any cached data for this email
-        await cache.invalidateUser(email);
+        // await cache.invalidateUser(email); // Comment out if cache doesn't exist
 
-        console.log(`✅ User created successfully: ${email}`);
+        console.log(`✅ User created successfully: ${email} with role: ${role}`);
 
         const responseTime = Date.now() - startTime;
         res.json({
             message: "✅ Account created successfully",
             token: token,
             userId: userId,
+            role: role,
             responseTime: responseTime
         });
-
     } catch (error) {
         console.error("❌ OTP verification error:", error);
         res.status(500).json({ message: "❌ Internal server error" });
