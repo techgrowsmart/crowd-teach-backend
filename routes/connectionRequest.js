@@ -1,9 +1,9 @@
 
 const express = require("express");
-const { getFirestore, Timestamp } = require("firebase-admin/firestore");
+const { Timestamp } = require("firebase-admin/firestore");
+const { db } = require("../config/firebase");
 const verifyToken = require("./../utils/verifyToken")
 const router = express.Router();
-const db = getFirestore();
 
 
 

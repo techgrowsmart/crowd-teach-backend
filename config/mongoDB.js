@@ -20,7 +20,7 @@ const connectMongoDB = async () => {
     return null;
   }
 
-  const mongoURI = process.env.MONGO_DB_URL;
+  let mongoURI = process.env.MONGO_DB_URL;
 
   if (!mongoURI) {
     console.error('❌ MongoDB URI not found in environment variables');
@@ -28,17 +28,46 @@ const connectMongoDB = async () => {
     throw new Error('MONGO_DB_URL is required');
   }
 
-  // Use production database for posts (GrowThoughts). Default 'test' is used when db name is missing from URI.
+  // DEBUG: Log raw env variable
+  console.log('🔍 RAW MONGO_DB_DATABASE env:', process.env.MONGO_DB_DATABASE);
+
+  // Use production database for posts (GrowThoughts)
   const dbName = process.env.MONGO_DB_DATABASE || 'gogrowsmart';
+
+  console.log('🔍 Final dbName used:', dbName);
+
+  // Ensure database name is in the URI (required for Atlas connections)
+  // MongoDB Atlas URIs have format: mongodb+srv://user:pass@host.mongodb.net/dbname?options
+  if (mongoURI.includes('mongodb.net')) {
+    // Check if URI already has a database name (anything between .net/ and ?)
+    const dbNameMatch = mongoURI.match(/\.mongodb\.net\/([^?]+)\?/);
+    if (dbNameMatch) {
+      // Replace existing database name with the correct one
+      const existingDbName = dbNameMatch[1];
+      if (existingDbName !== dbName) {
+        mongoURI = mongoURI.replace(`/${existingDbName}?`, `/${dbName}?`);
+        console.log(`🔄 Replaced database '${existingDbName}' with '${dbName}'`);
+      }
+    } else if (mongoURI.includes('/?')) {
+      // Replace /? with /dbname?
+      mongoURI = mongoURI.replace('/?', `/${dbName}?`);
+    } else if (mongoURI.endsWith('/')) {
+      // Append dbname if ends with /
+      mongoURI = `${mongoURI}${dbName}`;
+    } else if (!mongoURI.match(/\/[^/]+\?/)) {
+      // No database name in URI, add it before query params
+      mongoURI = mongoURI.replace('?', `/${dbName}?`);
+    }
+  }
 
   const options = {
     maxPoolSize: 10,
     serverSelectionTimeoutMS: 10000,
     socketTimeoutMS: 45000,
-    dbName: dbName,
   };
 
   console.log('📂 MongoDB database:', dbName);
+  console.log('� MongoDB URI pattern:', mongoURI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')); // Hide credentials
 
   const urisToTry = [mongoURI];
 

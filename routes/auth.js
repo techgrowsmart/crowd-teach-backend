@@ -46,9 +46,21 @@ router.post("/login", async (req, res) => {
         }
 
         // 🧪 Bypass OTP for test users (Google Play Console testing)
-        const testUsers = ["student1@example.com", "teacher56@example.com"];
+        const testUsers = ["student1@example.com", "teacher56@example.com", "teacher31@example.com"];
         if (testUsers.includes(email)) {
             console.log(`🧪 Test user detected: ${email} - Bypassing OTP`);
+            
+            // For teacher31@example.com, create user if doesn't exist
+            if (email === 'teacher31@example.com' && !user) {
+                const insertQuery = "INSERT INTO users (email, name, role, status) VALUES (?, ?, ?, ?)";
+                await client.execute(insertQuery, [email, 'Test Teacher', 'teacher', 'active'], { prepare: true });
+                
+                const insertTeacherQuery = "INSERT INTO teachers1 (email, name) VALUES (?, ?)";
+                await client.execute(insertTeacherQuery, [email, 'Test Teacher'], { prepare: true });
+                
+                user = { email, name: 'Test Teacher', role: 'teacher', status: 'active' };
+            }
+            
             const token = jwt.sign({
                 email: email,
                 role: user.role,
@@ -83,8 +95,14 @@ router.post("/login", async (req, res) => {
             text: `Your OTP code is: ${otp}. It is valid for 2 minutes.`,
         };
 
-        await transporter.sendMail(mailOptions);
-        console.log("✅ OTP Sent Successfully!");
+        try {
+            await transporter.sendMail(mailOptions);
+            console.log("✅ OTP Sent Successfully!");
+        } catch (emailError) {
+            console.error("❌ Error sending OTP via email:", emailError);
+            console.log(`🔧 FALLBACK: OTP for ${email} is: ${otp} (valid for 2 minutes)`);
+            // Continue with the flow even if email fails
+        }
 
         res.json({
             message: "✅ OTP sent successfully",
@@ -188,6 +206,52 @@ router.post('/refresh-token', async (req, res) => {
   } catch (error) {
     console.error("❌ Error refreshing token:", error);
     res.status(500).json({ message: "Failed to refresh token" });
+  }
+});
+
+// Update user role after signup
+router.post('/update-role', async (req, res) => {
+  try {
+    const { email, role } = req.body;
+    
+    if (!email || !role) {
+      return res.status(400).json({ message: 'Email and role are required' });
+    }
+    
+    if (!['student', 'teacher'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role. Must be student or teacher' });
+    }
+    
+    // Update user role in database
+    const updateQuery = "UPDATE users SET role = ? WHERE email = ?";
+    await client.execute(updateQuery, [role, email], { prepare: true });
+    
+    // Insert role-specific record
+    if (role === 'teacher') {
+      const insertTeacherQuery = "INSERT INTO teachers1 (email, name) VALUES (?, ?)";
+      await client.execute(insertTeacherQuery, [email, email.split('@')[0]], { prepare: true });
+    } else {
+      const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')";
+      await client.execute(insertStudentQuery, [email, email.split('@')[0]], { prepare: true });
+    }
+    
+    // Generate new token with updated role
+    const token = jwt.sign({
+      email: email,
+      role: role,
+      name: email.split('@')[0]
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    
+    res.json({
+      success: true,
+      message: 'Role updated successfully',
+      role: role,
+      token: token
+    });
+    
+  } catch (error) {
+    console.error("❌ Error updating role:", error);
+    res.status(500).json({ message: "Failed to update role" });
   }
 });
 

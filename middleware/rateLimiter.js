@@ -4,15 +4,28 @@
  */
 
 const rateLimit = require('express-rate-limit');
-const RedisStore = require('rate-limit-redis');
+const { RedisStore } = require('rate-limit-redis');
 const redis = require('../config/redis');
+
+// Helper function to get Redis client for rate limiting
+const getRedisClient = () => {
+  const client = redis.raw();
+  if (!client) {
+    // Fallback to memory store if Redis is not available
+    console.warn('⚠️ Redis not available for rate limiting, using memory store');
+    return null;
+  }
+  return {
+    sendCommand: (...args) => client.call(...args)
+  };
+};
 
 // General rate limiter
 const generalLimiter = rateLimit({
-  store: new RedisStore({
-    client: redis,
+  store: getRedisClient() ? new RedisStore({
+    ...getRedisClient(),
     prefix: 'rl:general:'
-  }),
+  }) : undefined,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
   message: {
@@ -33,10 +46,10 @@ const generalLimiter = rateLimit({
 
 // Strict rate limiter for auth endpoints
 const authLimiter = rateLimit({
-  store: new RedisStore({
-    client: redis,
+  store: getRedisClient() ? new RedisStore({
+    ...getRedisClient(),
     prefix: 'rl:auth:'
-  }),
+  }) : undefined,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20, // Limit each IP to 20 auth requests per windowMs
   message: {
@@ -57,10 +70,10 @@ const authLimiter = rateLimit({
 
 // Very strict rate limiter for signup
 const signupLimiter = rateLimit({
-  store: new RedisStore({
-    client: redis,
+  store: getRedisClient() ? new RedisStore({
+    ...getRedisClient(),
     prefix: 'rl:signup:'
-  }),
+  }) : undefined,
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 5, // Limit each IP to 5 signup attempts per hour
   message: {
@@ -81,10 +94,10 @@ const signupLimiter = rateLimit({
 
 // OTP specific rate limiter
 const otpLimiter = rateLimit({
-  store: new RedisStore({
-    client: redis,
+  store: getRedisClient() ? new RedisStore({
+    ...getRedisClient(),
     prefix: 'rl:otp:'
-  }),
+  }) : undefined,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // Limit each IP to 10 OTP attempts per windowMs
   message: {
@@ -105,11 +118,11 @@ const otpLimiter = rateLimit({
 
 // Email-specific rate limiter (prevents email bombing)
 const emailLimiter = rateLimit({
-  store: new RedisStore({
-    client: redis,
+  store: getRedisClient() ? new RedisStore({
+    ...getRedisClient(),
     keyGenerator: (req) => `email:${req.body?.email || req.query?.email || req.ip}`,
     prefix: 'rl:email:'
-  }),
+  }) : undefined,
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 3, // Limit each email to 3 requests per hour
   message: {

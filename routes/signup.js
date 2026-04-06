@@ -46,11 +46,6 @@ router.post("/signup", async (req, res) => {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
-        // Validate role
-        if (!role || !['student', 'teacher'].includes(role)) {
-            return res.status(400).json({ message: "❌ Invalid role. Must be 'student' or 'teacher'" });
-        }
-
         // Check if user already exists
         try {
             const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
@@ -75,9 +70,8 @@ router.post("/signup", async (req, res) => {
         const expirationTime = new Date(Date.now() + 2 * 60 * 1000);
 
         // Store OTP
-        const query = "INSERT INTO otp_table (id, email, otp, expires_at, user_data) VALUES (?, ?, ?, ?, ?)";
-        const userData = JSON.stringify({ fullName, phonenumber, role });
-        const params = [otpId, email, otp, expirationTime, userData];
+        const query = "INSERT INTO otp_table (id, email, otp, expires_at) VALUES (?, ?, ?, ?)";
+        const params = [otpId, email, otp, expirationTime];
         await client.execute(query, params, { prepare: true });
 
         // Send OTP email
@@ -109,87 +103,57 @@ router.post("/signup", async (req, res) => {
 });
 
 // Verify OTP route
-// Verify OTP route
-router.post("/signup/verify-otp", /* rateLimiter.otpLimiter, rateLimiter.concurrentLimiter(3), */ async (req, res) => {
-    const startTime = Date.now();
-    
+router.post("/signup/verify-otp", async (req, res) => {
     try {
-        const { email, otp } = req.body;
+        const { email, otp, name, role, phone } = req.body;
+        
+        console.log("🔍 OTP verification request:", { email, otp, name, role, phone });
+        
         if (!email || !otp) {
             return res.status(400).json({ message: "❌ Email and OTP are required" });
         }
 
-        console.log(`🔍 OTP verification for: ${email}`);
+        // Verify OTP from database
+        const query = "SELECT * FROM otp_table WHERE email = ? AND expires_at > ? ALLOW FILTERING";
+        const currentTime = new Date();
+        const result = await client.execute(query, [email, currentTime], { prepare: true });
 
-        // Get latest OTP with user data
-        const getOTPQuery = "SELECT otp, expires_at, user_data FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1";
-        const otpResult = await client.execute(getOTPQuery, [email], { prepare: true });
-
-        if (otpResult.rowLength === 0) {
+        if (result.rowLength === 0) {
             return res.status(400).json({ message: "❌ OTP not found or expired" });
         }
 
-        const latestOTP = otpResult.rows[0];
+        const storedOTP = result.rows[0];
         
-        // Check if OTP has expired
-        if (latestOTP.expires_at && new Date(latestOTP.expires_at) < new Date()) {
-            return res.status(400).json({ message: "❌ OTP has expired" });
-        }
-
-        if (latestOTP.otp !== otp) {
+        if (storedOTP.otp !== otp) {
             return res.status(400).json({ message: "❌ Invalid OTP" });
         }
 
-        // Extract user data from OTP
-        let userData;
-        try {
-            userData = JSON.parse(latestOTP.user_data);
-        } catch (parseError) {
-            console.error("Error parsing user data:", parseError);
-            return res.status(400).json({ message: "❌ Invalid user data" });
-        }
+        console.log("✅ OTP verification successful for:", email);
+        
+        // Delete used OTP
+        const deleteQuery = "DELETE FROM otp_table WHERE email = ? AND id = ?";
+        await client.execute(deleteQuery, [email, storedOTP.id], { prepare: true });
 
-        const { fullName, phonenumber, role } = userData;
-
-        // Generate user ID
+        // Create user in database
         const userId = uuidv4();
+        const userQuery = "INSERT INTO users (id, email, name, role, status, created_at) VALUES (?, ?, ?, ?, ?, ?)";
+        await client.execute(userQuery, [userId, email, name || email.split('@')[0], role || 'student', 'active', new Date()], { prepare: true });
 
-        // Insert user with correct role
-        const insertUserQuery = "INSERT INTO users (id, email, name, phonenumber, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)";
-        await client.execute(insertUserQuery, [userId, email, fullName, phonenumber, role, toTimestamp()], { prepare: true });
-
-        // Insert role-specific record
-        if (role === 'student') {
-            const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')";
-            await client.execute(insertStudentQuery, [email, fullName], { prepare: true });
-        } else if (role === 'teacher') {
-            const insertTeacherQuery = "INSERT INTO tutors (id, email, full_name, phone_number, status, created_at) VALUES (?, ?, ?, 'pending', ?)";
-            await client.execute(insertTeacherQuery, [userId, email, fullName, phonenumber, toTimestamp()], { prepare: true });
-        }
-
-        // Delete OTP
-        const deleteOTPQuery = "DELETE FROM otp_table WHERE email = ? AND id = (SELECT id FROM otp_table WHERE email = ? ORDER BY id DESC LIMIT 1)";
-        await client.execute(deleteOTPQuery, [email, email], { prepare: true });
-
-        // Generate JWT token
-        const token = jwt.sign({
-            email: email,
-            role: role,
-            name: fullName
-        }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
-
-        // Invalidate any cached data for this email
-        // await cache.invalidateUser(email); // Comment out if cache doesn't exist
-
-        console.log(`✅ User created successfully: ${email} with role: ${role}`);
-
-        const responseTime = Date.now() - startTime;
-        res.json({
+        // Generate real JWT token
+        const token = jwt.sign(
+            { userId, email, role: role || 'student' },
+            process.env.JWT_SECRET_KEY,
+            { expiresIn: '7d' }
+        );
+        
+        res.json({ 
+            success: true,
             message: "✅ Account created successfully",
             token: token,
-            userId: userId,
-            role: role,
-            responseTime: responseTime
+            role: role || 'student',
+            email: email,
+            name: name || email.split('@')[0],
+            userId: userId
         });
     } catch (error) {
         console.error("❌ OTP verification error:", error);

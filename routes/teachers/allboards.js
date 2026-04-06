@@ -29,6 +29,24 @@ const extractTuitions = (rows) => {
                 });
             }
 
+            if (t.university && t.year && t.subject) {
+                flatTuitions.push({
+                    email: row.email,
+                    name:row.name,
+                    profilePic: row.profilepic || "",
+                    university: t.university,
+                    universityId: t.universityId,
+                    year: t.year,
+                    yearId: t.yearId,
+                    subject: t.subject,
+                    charge: t.charge || "",
+                    day: t.day || "",
+                    timeFrom: t.timeFrom || "",
+                    timeTo: t.timeTo || "",
+                    description: row.introduction || "",
+                    language: row.language || "English",
+                });
+            }
 
             if (t.skill) {
                 flatTuitions.push({
@@ -91,7 +109,7 @@ router.post("/allboards", verifyToken, async (req, res) => {
                 const boardTeachers = flatTuitions.filter((t) => t.board === board.name);
 
                 const classes = (board.classes || []).map((cls) => {
-                    const classTeachers = boardTeachers.filter((t) => t.className === cls.id);
+                    const classTeachers = boardTeachers.filter((t) => t.className === cls.name);
 
                     const subjects = (cls.subjects || []).map((sub) => {
                         const subjectTeachers = classTeachers.filter((t) => t.subject === sub.name);
@@ -123,7 +141,52 @@ router.post("/allboards", verifyToken, async (req, res) => {
                 };
             });
 
-            return res.status(200).json(allBoardsWithCounts);
+            // Handle universities
+            const universitiesBoard = selectedCategory.boards.find((b) => b.id === "board_universities");
+            let universitiesData = [];
+            
+            if (universitiesBoard) {
+                universitiesData = (universitiesBoard.universities || []).map((university) => {
+                    const universityTeachers = flatTuitions.filter((t) => t.university === university.name);
+
+                    const years = (university.years || []).map((year) => {
+                        const yearTeachers = universityTeachers.filter((t) => t.year === year.name);
+
+                        const subjects = (year.subjects || []).map((sub) => {
+                            const subjectTeachers = yearTeachers.filter((t) => t.subject === sub.name);
+
+                            return {
+                                id: sub.id,
+                                name: sub.name,
+                                teacherCount: subjectTeachers.length,
+                                teachers: subjectTeachers,
+                            };
+                        });
+
+                        return {
+                            yearId: year.id,
+                            yearName: year.name,
+                            teacherCount: yearTeachers.length,
+                            subjects,
+                            teachers: yearTeachers,
+                        };
+                    });
+
+                    return {
+                        universityId: university.id,
+                        universityName: university.name,
+                        yearCount: years.length,
+                        teacherCount: universityTeachers.length,
+                        years,
+                        teachers: universityTeachers,
+                    };
+                });
+            }
+
+            return res.status(200).json({
+                boards: allBoardsWithCounts,
+                universities: universitiesData
+            });
         }
 
         return res.status(200).json([]);
@@ -284,6 +347,145 @@ router.post("/board", verifyToken,async (req, res) => {
     } catch (error) {
         console.error("❌ Error in /boardId", error.message);
         res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+// University endpoints
+router.post("/universities", verifyToken, async (req, res) => {
+    try {
+        const dataPath = path.join(__dirname, "../../utils/allBoards.json");
+        const raw = fs.readFileSync(dataPath);
+        const categories = JSON.parse(raw);
+
+        const schooling = categories.find((cat) => cat.id === "Subject teacher");
+        if (!schooling) return res.status(404).json({ error: "Schooling category not found" });
+
+        const universitiesBoard = schooling.boards.find((b) => b.id === "board_universities");
+        if (!universitiesBoard) return res.status(404).json({ error: "Universities board not found" });
+
+        const result = await client.execute("SELECT * FROM teacher_info");
+        const flatTuitions = extractTuitions(result.rows);
+
+        const universitiesList = (universitiesBoard.universities || []).map((university) => {
+            const universityTeachers = flatTuitions.filter((t) => t.university === university.name);
+
+            return {
+                universityId: university.id,
+                universityName: university.name,
+                teacherCount: universityTeachers.length,
+            };
+        });
+
+        res.status(200).json(universitiesList);
+    } catch (error) {
+        console.error("❌ Error in /universities:", error.message);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+router.post("/universities/:universityId/years", verifyToken, async (req, res) => {
+    try {
+        const { universityId } = req.params;
+        const dataPath = path.join(__dirname, "../../utils/allBoards.json");
+        const raw = fs.readFileSync(dataPath);
+        const categories = JSON.parse(raw);
+
+        const schooling = categories.find((cat) => cat.id === "Subject teacher");
+        if (!schooling) return res.status(404).json({ error: "Schooling category not found" });
+
+        const universitiesBoard = schooling.boards.find((b) => b.id === "board_universities");
+        if (!universitiesBoard) return res.status(404).json({ error: "Universities board not found" });
+
+        const university = universitiesBoard.universities.find((u) => u.id === universityId);
+        if (!university) return res.status(404).json({ error: "University not found" });
+
+        const result = await client.execute("SELECT * FROM teacher_info");
+        const flatTuitions = extractTuitions(result.rows);
+
+        const yearsList = (university.years || []).map((year) => {
+            const yearTeachers = flatTuitions.filter((t) => t.university === university.name && t.year === year.name);
+
+            return {
+                yearId: year.id,
+                yearName: year.name,
+                teacherCount: yearTeachers.length,
+            };
+        });
+
+        res.status(200).json({
+            universityId: university.id,
+            universityName: university.name,
+            years: yearsList,
+        });
+    } catch (error) {
+        console.error("❌ Error in /universities/:universityId/years:", error.message);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+router.post("/universities/:universityId/years/:yearId/subjects", verifyToken, async (req, res) => {
+    try {
+        const { universityId, yearId } = req.params;
+        const dataPath = path.join(__dirname, "../../utils/allBoards.json");
+        const raw = fs.readFileSync(dataPath);
+        const categories = JSON.parse(raw);
+
+        const schooling = categories.find((cat) => cat.id === "Subject teacher");
+        if (!schooling) return res.status(404).json({ error: "Schooling category not found" });
+
+        const universitiesBoard = schooling.boards.find((b) => b.id === "board_universities");
+        if (!universitiesBoard) return res.status(404).json({ error: "Universities board not found" });
+
+        const university = universitiesBoard.universities.find((u) => u.id === universityId);
+        if (!university) return res.status(404).json({ error: "University not found" });
+
+        const year = university.years.find((y) => y.id === yearId);
+        if (!year) return res.status(404).json({ error: "Year not found" });
+
+        const result = await client.execute("SELECT * FROM teacher_info");
+        const flatTuitions = extractTuitions(result.rows);
+
+        const subjectsList = (year.subjects || []).map((subject) => {
+            const subjectTeachers = flatTuitions.filter(
+                (t) => t.university === university.name && t.year === year.name && t.subject === subject.name
+            );
+
+            return {
+                id: subject.id,
+                name: subject.name,
+                teacherCount: subjectTeachers.length,
+            };
+        });
+
+        res.status(200).json({
+            universityId: university.id,
+            universityName: university.name,
+            yearId: year.id,
+            yearName: year.name,
+            subjects: subjectsList,
+        });
+    } catch (error) {
+        console.error("❌ Error in /universities/:universityId/years/:yearId/subjects:", error.message);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+router.post("/universities/teachers", verifyToken, async (req, res) => {
+    const { university, year, subject } = req.body;
+
+    if (!university || !year || !subject)
+        return res.status(400).json({ message: "University, year and subject are required" });
+
+    try {
+        const result = await client.execute("SELECT * FROM teacher_info");
+        const flatTuitions = extractTuitions(result.rows).filter(
+            (t) => t.university === university && t.year === year && t.subject === subject
+        );
+
+        res.json(flatTuitions);
+    } catch (err) {
+        console.error("Error fetching university teachers:", err);
+        res.status(500).json({ message: "Internal server error" });
     }
 });
 

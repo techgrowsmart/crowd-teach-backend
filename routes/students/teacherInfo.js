@@ -237,17 +237,34 @@ async function reloadTeacherInfoData() {
     }
 }
 
-// Auto-reload on server start
+// Auto-reload on server start with retry logic
 setTimeout(async () => {
-    try {
-        console.log("🚀 Auto-reloading TeacherInfo Redis on server start...");
-        await ensureRedis();
-        await reloadTeacherInfoData();
-        console.log("✅ TeacherInfo Redis auto-reload completed on server start");
-    } catch (error) {
-        console.error("❌ Failed to auto-reload TeacherInfo Redis on server start:", error);
-    }
-}, 5000);
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = 10000; // 10 seconds
+    
+    const attemptReload = async () => {
+        try {
+            console.log(`🚀 Auto-reloading TeacherInfo Redis on server start... (attempt ${retryCount + 1}/${maxRetries})`);
+            await ensureRedis();
+            await reloadTeacherInfoData();
+            console.log("✅ TeacherInfo Redis auto-reload completed on server start");
+        } catch (error) {
+            retryCount++;
+            console.error(`❌ Failed to auto-reload TeacherInfo Redis on server start (attempt ${retryCount}/${maxRetries}):`, error.message);
+            
+            if (retryCount < maxRetries) {
+                console.log(`🔄 Retrying in ${retryDelay/1000} seconds...`);
+                setTimeout(attemptReload, retryDelay);
+            } else {
+                console.log("⚠️ Max retries reached. TeacherInfo Redis auto-reload will be skipped.");
+                console.log("📝 The server will continue running without cached teacher data.");
+            }
+        }
+    };
+    
+    attemptReload();
+}, 10000); // Increased initial delay to 10 seconds
 
 module.exports = router;
 

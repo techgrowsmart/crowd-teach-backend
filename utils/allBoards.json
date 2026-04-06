@@ -328,6 +328,246 @@
                         {"id": "state_class_12_subject_7","name": "Biology"}
                     ] }
                 ]
+            },
+            {
+                "id": "board_universities",
+                "name": "Universities",
+                "universities": [
+                    {
+                        "id": "university_delhi",
+                        "name": "Delhi University",
+                        "years": [
+                            {
+                                "id": "year_1",
+                                "name": "1st Year",
+                                "subjects": [
+                                    {"id": "du_year1_eng", "name": "English"},
+                                    {"id": "du_year1_math", "name": "Mathematics"},
+                                    {"id": "du_year1_physics", "name": "Physics"},
+                                    {"id": "du_year1_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year1_cs", "name": "Computer Science"},
+                                    {"id": "du_year1_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "year_2",
+                                "name": "2nd Year",
+                                "subjects": [
+                                    {"id": "du_year2_eng", "name": "English"},
+                                    {"id": "du_year2_math", "name": "Mathematics"},
+                                    {"id": "du_year2_physics", "name": "Physics"},
+                                    {"id": "du_year2_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year2_cs", "name": "Computer Science"},
+                                    {"id": "du_year2_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "year_3",
+                                "name": "3rd Year",
+                                "subjects": [
+                                    {"id": "du_year3_eng", "name": "English"},
+                                    {"id": "du_year3_math", "name": "Mathematics"},
+                                    {"id": "du_year3_physics", "name": "Physics"},
+                                    {"id": "du_year3_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year3_cs", "name": "Computer Science"},
+                                    {"id": "du_year3_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "year_4",
+                                "name": "4th Year",
+                                "subjects": [
+                                    {"id": "du_year4_eng", "name": "English"},
+                                    {"id": "du_year4_math", "name": "Mathematics"},
+                                    {"id": "du_year4_physics", "name": "Physics"},
+                                    {"id": "du_year4_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year4_cs", "name": "Computer Science"},
+                                    {"id": "du_year4_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "year_5",
+                                "name": "5th Year",
+                                "subjects": [
+                                    {"id": "du_year5_eng", "name": "English"},
+                                    {"id": "du_year5_math", "name": "Mathematics"},
+                                    {"id": "du_year5_physics", "name": "Physics"},
+                                    {"id": "du_year5_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year5_cs", "name": "Computer Science"},
+                                    {"id": "du_year5_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "year_6",
+                                "name": "6th Year",
+                                "subjects": [
+                                    {"id": "du_year6_eng", "name": "English"},
+                                    {"id": "du_year6_math", "name": "Mathematics"},
+                                    {"id": "du_year6_physics", "name": "Physics"},
+                                    {"id": "du_year6_chemistry", "name": "Chemistry"},
+                                    {"id": "du_year6_cs", "name": "Computer Science"},
+                                    {"id": "du_year6_biology", "name": "Biology"}
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "university_mumbai",
+                        "name": "Mumbai University",
+                        "years": [
+                            {
+                                "id": "mu_year_1",
+                                "name": "1st Year",
+                                "subjects": [
+                                    {"id": "mu_year1_eng", "name": "English"},
+                                    {"id": "mu_year1_math", "name": "Mathematics"},
+                                    {"id": "mu_year1_physics", "name": "Physics"},
+                                    {"id": "mu_year1_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year1_cs", "name": "Computer Science"},
+                                    {"id": "mu_year1_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "mu_year_2",
+                                "name": "2nd Year",
+                                "subjects": [
+                                    {"id": "mu_year2_eng", "name": "English"},
+                                    {"id": "mu_year2_math", "name": "Mathematics"},
+                                    {"id": "mu_year2_physics", "name": "Physics"},
+                                    {"id": "mu_year2_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year2_cs", "name": "Computer Science"},
+                                    {"id": "mu_year2_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "mu_year_3",
+                                "name": "3rd Year",
+                                "subjects": [
+                                    {"id": "mu_year3_eng", "name": "English"},
+                                    {"id": "mu_year3_math", "name": "Mathematics"},
+                                    {"id": "mu_year3_physics", "name": "Physics"},
+                                    {"id": "mu_year3_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year3_cs", "name": "Computer Science"},
+                                    {"id": "mu_year3_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "mu_year_4",
+                                "name": "4th Year",
+                                "subjects": [
+                                    {"id": "mu_year4_eng", "name": "English"},
+                                    {"id": "mu_year4_math", "name": "Mathematics"},
+                                    {"id": "mu_year4_physics", "name": "Physics"},
+                                    {"id": "mu_year4_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year4_cs", "name": "Computer Science"},
+                                    {"id": "mu_year4_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "mu_year_5",
+                                "name": "5th Year",
+                                "subjects": [
+                                    {"id": "mu_year5_eng", "name": "English"},
+                                    {"id": "mu_year5_math", "name": "Mathematics"},
+                                    {"id": "mu_year5_physics", "name": "Physics"},
+                                    {"id": "mu_year5_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year5_cs", "name": "Computer Science"},
+                                    {"id": "mu_year5_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "mu_year_6",
+                                "name": "6th Year",
+                                "subjects": [
+                                    {"id": "mu_year6_eng", "name": "English"},
+                                    {"id": "mu_year6_math", "name": "Mathematics"},
+                                    {"id": "mu_year6_physics", "name": "Physics"},
+                                    {"id": "mu_year6_chemistry", "name": "Chemistry"},
+                                    {"id": "mu_year6_cs", "name": "Computer Science"},
+                                    {"id": "mu_year6_biology", "name": "Biology"}
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "university_bangalore",
+                        "name": "Bangalore University",
+                        "years": [
+                            {
+                                "id": "bu_year_1",
+                                "name": "1st Year",
+                                "subjects": [
+                                    {"id": "bu_year1_eng", "name": "English"},
+                                    {"id": "bu_year1_math", "name": "Mathematics"},
+                                    {"id": "bu_year1_physics", "name": "Physics"},
+                                    {"id": "bu_year1_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year1_cs", "name": "Computer Science"},
+                                    {"id": "bu_year1_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "bu_year_2",
+                                "name": "2nd Year",
+                                "subjects": [
+                                    {"id": "bu_year2_eng", "name": "English"},
+                                    {"id": "bu_year2_math", "name": "Mathematics"},
+                                    {"id": "bu_year2_physics", "name": "Physics"},
+                                    {"id": "bu_year2_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year2_cs", "name": "Computer Science"},
+                                    {"id": "bu_year2_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "bu_year_3",
+                                "name": "3rd Year",
+                                "subjects": [
+                                    {"id": "bu_year3_eng", "name": "English"},
+                                    {"id": "bu_year3_math", "name": "Mathematics"},
+                                    {"id": "bu_year3_physics", "name": "Physics"},
+                                    {"id": "bu_year3_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year3_cs", "name": "Computer Science"},
+                                    {"id": "bu_year3_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "bu_year_4",
+                                "name": "4th Year",
+                                "subjects": [
+                                    {"id": "bu_year4_eng", "name": "English"},
+                                    {"id": "bu_year4_math", "name": "Mathematics"},
+                                    {"id": "bu_year4_physics", "name": "Physics"},
+                                    {"id": "bu_year4_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year4_cs", "name": "Computer Science"},
+                                    {"id": "bu_year4_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "bu_year_5",
+                                "name": "5th Year",
+                                "subjects": [
+                                    {"id": "bu_year5_eng", "name": "English"},
+                                    {"id": "bu_year5_math", "name": "Mathematics"},
+                                    {"id": "bu_year5_physics", "name": "Physics"},
+                                    {"id": "bu_year5_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year5_cs", "name": "Computer Science"},
+                                    {"id": "bu_year5_biology", "name": "Biology"}
+                                ]
+                            },
+                            {
+                                "id": "bu_year_6",
+                                "name": "6th Year",
+                                "subjects": [
+                                    {"id": "bu_year6_eng", "name": "English"},
+                                    {"id": "bu_year6_math", "name": "Mathematics"},
+                                    {"id": "bu_year6_physics", "name": "Physics"},
+                                    {"id": "bu_year6_chemistry", "name": "Chemistry"},
+                                    {"id": "bu_year6_cs", "name": "Computer Science"},
+                                    {"id": "bu_year6_biology", "name": "Biology"}
+                                ]
+                            }
+                        ]
+                    }
+                ]
             }
         ]
     },
