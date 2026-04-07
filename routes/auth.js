@@ -222,24 +222,36 @@ router.post('/update-role', async (req, res) => {
       return res.status(400).json({ message: 'Invalid role. Must be student or teacher' });
     }
     
-    // Update user role in database
-    const updateQuery = "UPDATE users SET role = ? WHERE email = ?";
-    await client.execute(updateQuery, [role, email], { prepare: true });
+    // Find user by email first (Cassandra needs primary key for UPDATE)
+    const findUserQuery = "SELECT id, name, phonenumber FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(findUserQuery, [email], { prepare: true });
+    
+    if (userResult.rowLength === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const userId = userResult.rows[0].id;
+    const userName = userResult.rows[0].name || email.split('@')[0];
+    const userPhone = userResult.rows[0].phonenumber || '';
+    
+    // Update user role in database using id (primary key)
+    const updateQuery = "UPDATE users SET role = ? WHERE id = ?";
+    await client.execute(updateQuery, [role, userId], { prepare: true });
     
     // Insert role-specific record
     if (role === 'teacher') {
       const insertTeacherQuery = "INSERT INTO teachers1 (email, name) VALUES (?, ?)";
-      await client.execute(insertTeacherQuery, [email, email.split('@')[0]], { prepare: true });
+      await client.execute(insertTeacherQuery, [email, userName], { prepare: true });
     } else {
-      const insertStudentQuery = "INSERT INTO student (email, name, profileimage, class_year) VALUES (?, ?, '', '10')";
-      await client.execute(insertStudentQuery, [email, email.split('@')[0]], { prepare: true });
+      const insertStudentQuery = "INSERT INTO student (email, name, phone_number) VALUES (?, ?, ?)";
+      await client.execute(insertStudentQuery, [email, userName, userPhone], { prepare: true });
     }
     
     // Generate new token with updated role
     const token = jwt.sign({
       email: email,
       role: role,
-      name: email.split('@')[0]
+      name: userName
     }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
     
     res.json({
@@ -251,7 +263,9 @@ router.post('/update-role', async (req, res) => {
     
   } catch (error) {
     console.error("❌ Error updating role:", error);
-    res.status(500).json({ message: "Failed to update role" });
+    console.error("Error details:", error.message);
+    console.error("Stack trace:", error.stack);
+    res.status(500).json({ message: "Failed to update role: " + error.message });
   }
 });
 

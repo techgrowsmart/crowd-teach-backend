@@ -12,7 +12,7 @@ set -e  # Exit on any error
 # Configuration
 EC2_HOST="16.171.57.134"
 EC2_USER="ec2-user"
-SSH_KEY="~/.ssh/gogrowsmart.pem"  # Update this path to your actual key
+SSH_KEY="/Users/matul/Downloads/gogrowsmart-key.pem"  # Update this path to your actual key
 REPO_URL="https://github.com/Scoder6/crowd-teach-gogrowsmart-backend.git"
 APP_DIR="/home/ec2-user/crowd-teach-gogrowsmart-backend"
 CERTS_DIR="/home/ec2-user/certs"
@@ -78,7 +78,7 @@ run_remote "
     
     echo '📦 Installing Nginx...'
     if ! command -v nginx &> /dev/null; then
-        sudo amazon-linux-extras install nginx1 -y
+        sudo dnf install -y nginx
     fi
     
     echo '🔧 Creating directories...'
@@ -109,7 +109,8 @@ run_remote "
     if [ -d '$APP_DIR' ]; then
         echo '🔄 Updating existing repository...'
         cd $APP_DIR
-        git pull origin main
+        git fetch origin
+        git reset --hard origin/main
     else
         echo '📥 Cloning repository...'
         cd /home/ec2-user

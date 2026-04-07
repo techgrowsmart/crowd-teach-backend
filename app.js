@@ -12,36 +12,33 @@ const verifyToken = require("./utils/verifyToken")
 const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
-// CORS configuration - Allow all localhost for development
-const allowedOrigins = [
-  'http://localhost:5000',  // Backend itself
-  'http://localhost:8081', 'http://localhost:8082', 'http://localhost:8083', 'http://localhost:8084',
-  'http://localhost:19000', 'http://localhost:19001', 'http://localhost:19002', 'http://localhost:19006',
-  'http://localhost:3000',
-  'https://gogrowsmart.com', 'https://portal.gogrowsmart.com', 'https://growsmartserver.gogrowsmart.com'
-];
+// Import optimizations
+const rateLimiter = require('./middleware/rateLimiter');
+const timeout = require('./middleware/timeout');
+const { initializeOptimizedDB } = require('./config/db-optimized');
 
-// Handle preflight requests for all routes
-app.options('*', cors());
+// Apply global middleware
+app.use(rateLimiter.generalLimiter);
+app.use(timeout.requestTimeout(30000)); // 30 second timeout
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc)
-    if (!origin) return callback(null, true);
-    // Allow any localhost origin for development
-    if (allowedOrigins.indexOf(origin) !== -1 || origin.match(/^http:\/\/localhost:\d+$/)) {
-      callback(null, true);
-    } else {
-      console.log('CORS blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
+// CORS configuration - allow frontend origin
+const corsOptions = {
+  origin: [
+    'http://localhost:8081', 
+    'http://localhost:19006', 
+    'https://growsmartserver.gogrowsmart.com',
+    'https://portal.gogrowsmart.com',
+    'https://app.growsmart.com',
+    'https://gogrowsmart.com'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Test-User', 'Accept', 'Origin', 'X-Requested-With'],
-  exposedHeaders: ['Content-Length', 'X-Requested-With'],
-  optionsSuccessStatus: 200
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  credentials: true,
+  maxAge: 86400
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -68,9 +65,22 @@ connectMongoDB().catch(err => {
 // Production-ready SSL configuration
 let httpServer;
 
-// Use HTTP only - nginx handles SSL termination
-httpServer = http.createServer(app);
-console.log('� HTTP server (nginx handles SSL)');
+// Check if we're in production and have SSL certificates
+if (process.env.NODE_ENV === 'production' && fs.existsSync('./certs/privkey.pem') && fs.existsSync('./certs/fullchain.pem')) {
+  const options = {
+    key: fs.readFileSync('./certs/privkey.pem'),
+    cert: fs.readFileSync('./certs/fullchain.pem')
+  };
+  httpServer = https.createServer(options, app);
+  console.log('🔒 HTTPS server configured with SSL certificates');
+} else {
+  httpServer = http.createServer(app);
+  if (process.env.NODE_ENV === 'production') {
+    console.log('⚠️  Production mode but no SSL certificates found, falling back to HTTP');
+  } else {
+    console.log('🔓 Development mode: HTTP server');
+  }
+}
 
 
 const uploadDir = path.join(__dirname, "uploads");
@@ -156,13 +166,16 @@ const getProfie = require("./routes/getProfile")
 const connectionRequest =require("./routes/connectionRequest")
 const addonClass = require("./routes/teachers/addonClass")
 const myTutors = require("./routes/students/myTutors")
-const {v4: uuidv4} = require("uuid");
+const {preloadTeachersToQueue}= require("./utils/preLoadTeachersQueue")
+const redisClient= require("./config/redis")
 const allboards = require("./routes/teachers/allboards")
 const teachers = require("./routes/students/teachers")
 const teacherInfoRoutes = require("./routes/students/teacherInfo.js"); //for teachers list
 const valuesToselect = require("./routes/boardsValues")
 const review = require('./routes/students/review')
 const favoritesRoutes = require("./routes/favorites");
+const testAuthRoutes = require('./routes/test-auth');
+const {v4: uuidv4} = require("uuid");
 const multerS3 = require("multer-s3");
 const s3 = require("./config/s3");
 const { createObjectCsvWriter } = require('csv-writer');
@@ -173,8 +186,6 @@ const classBoardData = JSON.parse(fs.readFileSync('./utils/allBoards.json', "utf
 const notificationRoutes = require('./routes/notification');
 //routes for createSubject
 const createSubject = require('./routes/teachers/createSubject.js');
-// MongoDB Posts/Thoughts routes
-const postsMongoRoutes = require('./routes/posts-mongo');
 
 app.use("/api", signupRoutes);
 app.use("/api/auth", authRoutes);
@@ -196,13 +207,20 @@ app.use("/api",addonClass)
 app.use("/api", createSubject);
 
 app.use("/api", notificationRoutes);
-
+// for teacherInfoRoutes
+app.use("/api", teacherInfoRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 
-// Register MongoDB posts routes
-app.use("/api/posts", postsMongoRoutes);
+app.use("/api/favorites", favoritesRoutes);
+app.use("/api/test-auth", testAuthRoutes);
 
 // Posts/Thoughts routes - Using MongoDB
+const postsRoutes = require('./routes/posts-mongo');
+app.use("/api/posts", postsRoutes);
+
+// User profile routes - Using AstraDB
+const userProfileRoutes = require('./routes/userProfile');
+app.use("/api/userProfile", userProfileRoutes);
 
 // const client = new cassandra.Client({
 //
@@ -812,7 +830,8 @@ app.post("/api/upload",verifyToken, (req, res) => {
     }
 
     console.log("File uploaded successfully:", req.file);
-    const fileUrl = `https://${req.headers.host}/uploads/${req.file.filename}`;
+    const protocol = req.headers.host?.includes('localhost') ? 'http' : 'https';
+    const fileUrl = `${protocol}://${req.headers.host}/uploads/${req.file.filename}`;
     res.json({ url: fileUrl });
   });
 });
@@ -1305,11 +1324,15 @@ app.put("/api/update-bank-details", verifyToken, async (req, res) => {
 });
 
 
+// Initial preload on server start
+preloadTeachersToQueue().then(r => {});
+
 // Endpoint to manually trigger teacher data preload
 app.get("/api/preload-teachers", async (req, res) => {
     try {
         console.log("🔄 Manual teacher preload requested");
-        res.json({ success: true, message: "⚠️ Teacher preload not available" });
+        await preloadTeachersToQueue();
+        res.json({ success: true, message: "✅ Teacher data preloaded successfully" });
     } catch (error) {
         console.error("❌ Error in manual preload:", error);
         res.status(500).json({ success: false, message: "Failed to preload teacher data", error: error.message });
@@ -1325,7 +1348,7 @@ app.get("/", (req, res) => {
 
 
 const HOST = process.env.HOST || '0.0.0.0';
-const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 443 : 5000);
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 443 : 3000);
 const PROTOCOL = process.env.NODE_ENV === 'production' && httpServer instanceof https.Server ? 'https' : 'http';
 
 httpServer.listen(PORT, HOST, () => {

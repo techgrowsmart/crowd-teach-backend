@@ -22,6 +22,12 @@ const connectMongoDB = async () => {
 
   let mongoURI = process.env.MONGO_DB_URL;
 
+  // Use local MongoDB when running in Docker
+  if (process.env.USE_LOCAL_DB === 'true' && process.env.LOCAL_MONGO_URL) {
+    mongoURI = process.env.LOCAL_MONGO_URL;
+    console.log('🐳 Using local MongoDB (Docker)');
+  }
+
   if (!mongoURI) {
     console.error('❌ MongoDB URI not found in environment variables');
     console.log('Available env vars:', Object.keys(process.env).filter(key => key.includes('MONGO')));
@@ -71,16 +77,10 @@ const connectMongoDB = async () => {
 
   const urisToTry = [mongoURI];
 
-  // In development, still try local fallback if Atlas fails
-  // Comment this out to force production database only
-  if (mongoURI.includes('mongodb.net') && process.env.NODE_ENV !== 'production' && process.env.FORCE_PRODUCTION_DB !== 'true') {
-    urisToTry.push('mongodb://localhost:27017/gogrowsmart');
-  }
-
+  // No fallback - only use the configured database
   for (const uri of urisToTry) {
     try {
-      const isLocal = uri.includes('localhost');
-      console.log(`🔄 Connecting to MongoDB${isLocal ? ' (local fallback)' : ''}...`);
+      console.log(`🔄 Connecting to MongoDB...`);
 
       const conn = await connectWithRetry(uri, options);
       console.log('✅ Connected to MongoDB successfully');
@@ -100,17 +100,12 @@ const connectMongoDB = async () => {
 
       return conn;
     } catch (error) {
-      if (uri.includes('localhost')) {
-        console.error('❌ Local MongoDB also failed:', error.message);
-      } else {
-        console.error('❌ MongoDB connection failed:', error.message);
-        if (error.message?.includes('whitelist') || error.message?.includes('Could not connect')) {
-          console.log('\n📌 Fix: Add your IP to MongoDB Atlas Network Access:');
-          console.log('   https://cloud.mongodb.com → Network Access → Add IP Address');
-          console.log('   Or run local MongoDB: docker run -d -p 27017:27017 mongo\n');
-        }
+      console.error('❌ MongoDB connection failed:', error.message);
+      if (error.message?.includes('whitelist') || error.message?.includes('Could not connect')) {
+        console.log('\n📌 Fix: Add your IP to MongoDB Atlas Network Access:');
+        console.log('   https://cloud.mongodb.com → Network Access → Add IP Address\n');
       }
-      if (uri === urisToTry[urisToTry.length - 1]) throw error;
+      throw error;
     }
   }
 };

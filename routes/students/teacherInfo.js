@@ -119,8 +119,9 @@ router.post("/teacherInfo", verifyToken, async (req, res) => {
         };
 
         const processTeacher = (teacher) => {
+            const protocol = req.headers.host?.includes('localhost') ? 'http' : 'https';
             teacher.profilePic =
-                teacher.profilepic || `https://${req.headers.host}/uploads/default-profile.png`;
+                teacher.profilepic || `${protocol}://${req.headers.host}/uploads/default-profile.png`;
             return teacher;
         };
 

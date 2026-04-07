@@ -23,7 +23,14 @@ async function _initClient() {
 
   _isConnecting = true;
   try {
-    const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    let url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    
+    // Use local Redis when running in Docker
+    if (process.env.USE_LOCAL_DB === 'true' && process.env.LOCAL_REDIS_URL) {
+      url = process.env.LOCAL_REDIS_URL;
+      console.log('🐳 Using local Redis (Docker)');
+    }
+    
     _client = createClient({ url });
 
     _client.on('error', (err) => {

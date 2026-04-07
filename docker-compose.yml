@@ -13,6 +13,7 @@ services:
       - ./certs:/app/certs:ro
     depends_on:
       - redis
+      - mongodb
     restart: unless-stopped
     networks:
       - app-network
@@ -28,8 +29,24 @@ services:
       - app-network
     command: redis-server --appendonly yes
 
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=gogrowsmart
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    restart: unless-stopped
+    networks:
+      - app-network
+
 volumes:
   redis_data:
+  mongodb_data:
 
 networks:
   app-network:

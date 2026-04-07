@@ -46,21 +46,53 @@ router.post("/signup", async (req, res) => {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
-        // Check if user already exists
+        // Check if user already exists in ANY table (users, teachers1, student)
         try {
-            const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
+            // Check users table
+            const checkUserQuery = "SELECT email, status FROM users WHERE email = ? ALLOW FILTERING";
             const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
 
             if (userResult.rowLength > 0) {
-                if (userResult.rows[0].status === "active") {
-                    return res.status(400).json({
+                const user = userResult.rows[0];
+                if (user.status === "active" || user.status === "dormant") {
+                    return res.status(409).json({
                         message: "❌ This email is already registered. Please login instead.",
-                        alreadyRegistered: true
+                        alreadyRegistered: true,
+                        status: user.status
                     });
                 }
             }
+
+            // Check teachers1 table
+            const checkTeacherQuery = "SELECT email FROM teachers1 WHERE email = ?";
+            const teacherResult = await client.execute(checkTeacherQuery, [email], { prepare: true });
+
+            if (teacherResult.rowLength > 0) {
+                return res.status(409).json({
+                    message: "❌ This email is already registered as a teacher. Please login instead.",
+                    alreadyRegistered: true,
+                    role: "teacher"
+                });
+            }
+
+            // Check student table
+            const checkStudentQuery = "SELECT email FROM student WHERE email = ?";
+            const studentResult = await client.execute(checkStudentQuery, [email], { prepare: true });
+
+            if (studentResult.rowLength > 0) {
+                return res.status(409).json({
+                    message: "❌ This email is already registered as a student. Please login instead.",
+                    alreadyRegistered: true,
+                    role: "student"
+                });
+            }
+
         } catch (checkError) {
-            console.error("Error checking user:", checkError);
+            console.error("Error checking existing user:", checkError);
+            return res.status(500).json({
+                message: "❌ Error checking user registration status. Please try again.",
+                error: checkError.message
+            });
         }
 
         // Generate OTP
@@ -133,6 +165,17 @@ router.post("/signup/verify-otp", async (req, res) => {
         // Delete used OTP
         const deleteQuery = "DELETE FROM otp_table WHERE email = ? AND id = ?";
         await client.execute(deleteQuery, [email, storedOTP.id], { prepare: true });
+
+        // CRITICAL: Double-check if user already exists (prevent race conditions)
+        const checkExistingQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
+        const existingResult = await client.execute(checkExistingQuery, [email], { prepare: true });
+
+        if (existingResult.rowLength > 0) {
+            return res.status(409).json({
+                message: "❌ This email is already registered. Please login instead.",
+                alreadyRegistered: true
+            });
+        }
 
         // Create user in database
         const userId = uuidv4();

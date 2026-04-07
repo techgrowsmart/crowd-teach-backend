@@ -20,8 +20,8 @@ const getRedisClient = () => {
   };
 };
 
-// General rate limiter
-const generalLimiter = rateLimit({
+// General rate limiter - DISABLED in development
+const generalLimiter = process.env.NODE_ENV === 'production' ? rateLimit({
   store: getRedisClient() ? new RedisStore({
     ...getRedisClient(),
     prefix: 'rl:general:'
@@ -42,7 +42,7 @@ const generalLimiter = rateLimit({
       retryAfter: '15 minutes'
     });
   }
-});
+}) : (req, res, next) => next(); // Skip in development
 
 // Strict rate limiter for auth endpoints
 const authLimiter = rateLimit({
