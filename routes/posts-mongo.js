@@ -104,14 +104,30 @@ async function getUserProfile(email) {
   }
 }
 
+// Helper function to save base64 image to file
+function saveBase64Image(base64String, filename) {
+  try {
+    // Remove data URL prefix if present
+    const base64Data = base64String.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    const filepath = path.join(uploadDir, filename);
+    fs.writeFileSync(filepath, buffer);
+    return `/uploads/${filename}`;
+  } catch (error) {
+    console.error('❌ Error saving base64 image:', error);
+    return null;
+  }
+}
+
 // Create a new post (any authenticated user)
 router.post('/create', verifyToken, upload.single('postImage'), async (req, res) => {
   try {
-    const { content, tags } = req.body;
+    const { content, tags, imageUri } = req.body;
     const userEmail = req.user.email;
     const userRole = req.user.role || 'Unknown';
 
     console.log('🔍 Creating post - User Role:', userRole, 'Email:', userEmail);
+    console.log('📸 Image data:', { hasFile: !!req.file, hasImageUri: !!imageUri });
 
     if (!content || content.trim() === '') {
       return res.status(400).json({
@@ -130,8 +146,20 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
     }
 
     const postId = uuidv4();
-    const postImage = req.file ? `/uploads/${req.file.filename}` : null;
     const tagsArray = tags ? tags.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
+    
+    // Handle image from either file upload (mobile) or base64 URI (web)
+    let postImage = null;
+    if (req.file) {
+      // File upload from mobile
+      postImage = `/uploads/${req.file.filename}`;
+    } else if (imageUri && imageUri.startsWith('data:image')) {
+      // Base64 image from web
+      const filename = `${Date.now()}.jpg`;
+      postImage = saveBase64Image(imageUri, filename);
+    }
+    
+    console.log('🖼️ Post image path:', postImage);
 
     const newPost = new Post({
       id: postId,
@@ -214,6 +242,49 @@ router.get('/all', verifyToken, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error fetching posts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch posts'
+    });
+  }
+});
+
+// GET /posts - Public endpoint for thoughtsCard (no authentication required)
+router.get('/', async (req, res) => {
+  try {
+    console.log('🔍 Public posts endpoint accessed - fetching posts for thoughtsCard');
+    
+    const posts = await Post.find({})
+      .sort({ created_at: -1 })
+      .limit(50) // Limit to prevent large responses
+      .lean();
+
+    const formattedPosts = posts.map(post => ({
+      id: post.id,
+      author: {
+        email: post.author_email,
+        name: post.author_name,
+        role: post.author_role,
+        profile_pic: post.author_profile_pic || ''
+      },
+      content: post.content,
+      postImage: post.post_image,
+      likes: post.likes || 0,
+      createdAt: post.created_at,
+      tags: post.tags || [],
+      isLiked: false // Public posts don't show like status
+    }));
+
+    console.log(`✅ Fetched ${formattedPosts.length} posts for thoughtsCard`);
+
+    res.json({
+      success: true,
+      data: formattedPosts,
+      total: formattedPosts.length
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching public posts:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch posts'
@@ -506,6 +577,62 @@ router.get('/:postId/likes', verifyToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch likes'
+    });
+  }
+});
+
+// Delete a post (author only, within 24 hours)
+router.delete('/:postId', verifyToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const userEmail = req.user.email;
+
+    // Check if post exists
+    const post = await Post.findOne({ id: postId });
+
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    // Check if user is the author
+    if (post.author_email !== userEmail) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the author can delete this post'
+      });
+    }
+
+    // Check if post is within 24 hours
+    const postDate = new Date(post.created_at);
+    const now = new Date();
+    const diffHours = (now.getTime() - postDate.getTime()) / (1000 * 60 * 60);
+
+    if (diffHours > 24) {
+      return res.status(403).json({
+        success: false,
+        message: 'Posts can only be deleted within 24 hours of creation'
+      });
+    }
+
+    // Delete post and related data
+    await Post.deleteOne({ id: postId });
+    await PostLike.deleteMany({ post_id: postId });
+    await PostComment.deleteMany({ post_id: postId });
+    await CommentReply.deleteMany({ post_id: postId });
+
+    res.json({
+      success: true,
+      message: 'Post deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error deleting post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete post'
     });
   }
 });
