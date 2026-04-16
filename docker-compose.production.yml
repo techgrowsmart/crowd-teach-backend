@@ -12,9 +12,10 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
-      - USE_LOCAL_DB=false
+      - USE_LOCAL_DB=true
       - LOCAL_REDIS_URL=redis://redis:6379
       - REDIS_URL=redis://redis:6379
+      - MONGO_DB_URL=mongodb://admin:password123@mongodb:27017/gogrowsmart?authSource=admin
     env_file:
       - .env.production
     volumes:
@@ -23,6 +24,8 @@ services:
       - ./logs:/app/logs
     depends_on:
       redis:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -53,21 +56,26 @@ services:
     sysctls:
       - net.core.somaxconn=511
 
-  # Optional: MongoDB local container if needed
-  # mongodb:
-  #   image: mongo:7
-  #   container_name: growsmart-mongodb
-  #   ports:
-  #     - "127.0.0.1:27017:27017"
-  #   environment:
-  #     - MONGO_INITDB_ROOT_USERNAME=admin
-  #     - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ADMIN_PASSWORD}
-  #     - MONGO_INITDB_DATABASE=gogrowsmart
-  #   volumes:
-  #     - mongodb_data:/data/db
-  #   restart: unless-stopped
-  #   networks:
-  #     - app-network
+  mongodb:
+    image: mongo:7
+    container_name: growsmart-mongodb
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+      - MONGO_INITDB_DATABASE=gogrowsmart
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   redis_data:
