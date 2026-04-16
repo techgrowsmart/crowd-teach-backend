@@ -4,40 +4,64 @@ const verifyToken = require("../utils/verifyToken");
 const router = express.Router();
 
 
-router.post("/sudentProfile", verifyToken, async (req, res) => {
+router.post("/studentProfile", verifyToken, async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
         return res.status(400).json({ error: "Email is required" });
     }
 
-    const query = "SELECT * FROM student WHERE email = ?";
-    const params = [email];
-
     try {
-        const result = await cassandraClient.execute(query, params, { prepare: true });
+        // First try to get from student table
+        const studentQuery = "SELECT * FROM student WHERE email = ?";
+        const studentResult = await cassandraClient.execute(studentQuery, [email], { prepare: true });
 
-        if (result.rowLength === 0) {
+        if (studentResult.rowLength > 0) {
+            const user = studentResult.rows[0];
+            console.log('✅ Found student profile:', user.name);
+            return res.status(200).json({
+                email,
+                name: user.name,
+                profileimage: user.profileimage,
+                fullAddress: user.address,
+                classYear: user.class_year,
+                country: user.country,
+                dateOfBirth: user.date_of_birth,
+                educationBoard: user.board,
+                preferredMedium: user.medium,
+                phone: user.phone_number,
+                pincode: user.pincode,
+                instituteName: user.school_name,
+                stateName: user.state,
+            });
+        }
+
+        // Fallback: if not in student table, get basic info from users table
+        const userQuery = "SELECT name, profileimage, role FROM users WHERE email = ? ALLOW FILTERING";
+        const userResult = await cassandraClient.execute(userQuery, [email], { prepare: true });
+
+        if (userResult.rowLength === 0) {
             return res.status(404).json({ error: "User not found" });
         }
 
-        const user = result.rows[0];
-        console.log(user)
-
+        const user = userResult.rows[0];
+        console.log('✅ Found basic user profile (student profile not completed):', user.name);
+        
+        // Return basic profile with empty fields for uncompleted profile
         return res.status(200).json({
             email,
             name: user.name,
             profileimage: user.profileimage,
-            fullAddress: user.address,
-            classYear: user.class_year,
-            country: user.country,
-            dateOfBirth: user.date_of_birth,
-            educationBoard: user.board,
-            preferredMedium: user.medium,
-            phone: user.phone_number,
-            pincode: user.pincode,
-            instituteName: user.school_name,
-            stateName: user.state,
+            fullAddress: "",
+            classYear: "",
+            country: "",
+            dateOfBirth: "",
+            educationBoard: "",
+            preferredMedium: "",
+            phone: "",
+            pincode: "",
+            instituteName: "",
+            stateName: "",
         });
     } catch (error) {
         console.error("Error fetching user profile:", error);
@@ -46,39 +70,7 @@ router.post("/sudentProfile", verifyToken, async (req, res) => {
 });
 
 
-router.post("/userProfile", verifyToken, async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        return res.status(400).json({ error: "Email is required" });
-    }
-
-    const query = "SELECT id, created_at, profileimage, name, role, status FROM users WHERE email = ?";
-    const params = [email];
-
-    try {
-        const result = await cassandraClient.execute(query, params, { prepare: true });
-
-        if (result.rowLength === 0) {
-            return res.status(404).json({ error: "User not found" });
-        }
-
-        const user = result.rows[0];
-
-        return res.status(200).json({
-            email,
-            created_at: user.created_at,
-            name: user.name,
-            role: user.role,
-            status: user.status || 'dormant', // Default to 'dormant' if status is null
-            profileimage: user.profileimage,
-        });
-
-    } catch (error) {
-        console.error("Error fetching user profile:", error);
-        return res.status(500).json({ error: "Unable to fetch user profile" });
-    }
-});
+// userProfile route moved to dedicated routes/userProfile.js to avoid conflicts
 
 router.post("/teacherProfile", verifyToken, async (req, res) => {
     const { email } = req.body;

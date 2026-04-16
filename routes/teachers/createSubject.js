@@ -6,13 +6,11 @@ const verifyToken = require("../../utils/verifyToken")
 // Add this route to get teacher's subjects
 router.get("/teacher-subjects", verifyToken, async (req, res) => {
     try {
-        const teacherEmail = req.user.email;
         const { email } = req.query;
 
-        // Use the email from query or from token
-        const targetEmail = email || teacherEmail;
+        console.log("📊 Teacher subjects fetch - Query email:", email);
 
-        if (!targetEmail) {
+        if (!email) {
             return res.status(400).json({ 
                 message: "Email is required" 
             });
@@ -24,7 +22,10 @@ router.get("/teacher-subjects", verifyToken, async (req, res) => {
             ALLOW FILTERING
         `;
 
-        const result = await client.execute(query, [targetEmail], { prepare: true });
+        console.log("📊 Executing query with email:", email);
+        const result = await client.execute(query, [email], { prepare: true });
+        console.log("📊 Query result rows:", result.rows.length);
+        console.log("📊 Query result:", JSON.stringify(result.rows, null, 2));
 
         res.status(200).json({
             message: "Subjects fetched successfully",

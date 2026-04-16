@@ -6,6 +6,10 @@ const client = require("../../config/db");
 
 
 
+// Default profile pictures
+const DEFAULT_TEACHER_PROFILE_PIC = "https://cdn-icons-png.flaticon.com/512/4140/4140047.png"; // Female teacher avatar
+const DEFAULT_STUDENT_PROFILE_PIC = "https://cdn-icons-png.flaticon.com/512/4140/4140048.png"; // Student/child avatar
+
 router.post("/add-tutor", verifyToken, async (req, res) => {
     const {
         studentEmail,
@@ -18,13 +22,9 @@ router.post("/add-tutor", verifyToken, async (req, res) => {
         studentProfilePic,
     } = req.body;
 
-    // Validate profile pics
-    if (!profilePic || !studentProfilePic) {
-        return res.status(400).json({
-            success: false,
-            message: "Both teacher and student profile pictures are required.",
-        });
-    }
+    // Use default profile pics if not provided
+    const finalTeacherProfilePic = profilePic || DEFAULT_TEACHER_PROFILE_PIC;
+    const finalStudentProfilePic = studentProfilePic || DEFAULT_STUDENT_PROFILE_PIC;
 
     try {
         const studentDocRef = db
@@ -36,7 +36,7 @@ router.post("/add-tutor", verifyToken, async (req, res) => {
         await studentDocRef.set({
             teacherEmail,
             teacherName,
-            teacherProfilePic: profilePic,
+            teacherProfilePic: finalTeacherProfilePic,
             subject,
             className,
             addedAt: new Date(),
@@ -51,7 +51,7 @@ router.post("/add-tutor", verifyToken, async (req, res) => {
         await teacherDocRef.set({
             studentEmail,
             studentName,
-            studentProfilePic,
+            studentProfilePic: finalStudentProfilePic,
             className,
             addedAt: new Date(),
         });
@@ -71,9 +71,9 @@ router.post("/add-tutor", verifyToken, async (req, res) => {
                 totalSubjects[i].trim(),
                 studentEmail,
                 teacherName,
-                profilePic,
+                finalTeacherProfilePic,
                 studentName,
-                studentProfilePic,
+                finalStudentProfilePic,
                 String(new Date().toLocaleDateString())
                 ])
         }
@@ -100,8 +100,8 @@ router.post("/add-tutor", verifyToken, async (req, res) => {
     }
 });
 
-//Get all contacts for a student or teacher
-router.post("/contacts", verifyToken, async (req, res) => {
+//Get all contacts for a student or teacher (Firebase-based - deprecated, use /api/contacts instead)
+router.post("/firebase-contacts", verifyToken, async (req, res) => {
     const { userEmail, type } = req.body;
 
     if (!userEmail || !type) {
@@ -109,6 +109,12 @@ router.post("/contacts", verifyToken, async (req, res) => {
     }
 
     try {
+        // Check if Firebase is properly initialized
+        if (!db || typeof db.collection !== 'function') {
+            console.log('⚠️ Firebase not initialized, returning empty contacts');
+            return res.status(200).json({ success: true, contacts: [] });
+        }
+        
         const collectionType = type === "teacher" ? "students" : "teachers";
 
         const snapshot = await db
@@ -122,7 +128,8 @@ router.post("/contacts", verifyToken, async (req, res) => {
         res.status(200).json({ success: true, contacts });
     } catch (err) {
         console.error("🔥 Failed to fetch contacts:", err);
-        res.status(500).json({ success: false, message: "Server error" });
+        // Return empty contacts instead of 500 error
+        res.status(200).json({ success: true, contacts: [] });
     }
 });
 

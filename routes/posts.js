@@ -218,8 +218,8 @@ async function getUserProfile(email) {
 // Create a new post (teachers only)
 router.post('/create', verifyToken, upload.single('postImage'), async (req, res) => {
   try {
-    const { content, tags } = req.body;
-    const userEmail = req.user.email;
+    const { content, tags, email } = req.body;
+    const userEmail = email || req.user.email; // Use email from body if provided (for frontend compatibility)
     const userRole = req.user.role || 'Unknown';
 
     // Check if user is a teacher
@@ -949,14 +949,14 @@ router.put('/:postId', verifyToken, upload.single('postImage'), async (req, res)
   }
 });
 
-// Delete a post (author only)
+// Delete a post (author only, within 24 hours)
 router.delete('/:postId', verifyToken, async (req, res) => {
   try {
     const { postId } = req.params;
     const userEmail = req.user.email;
 
-    // Check if post exists and user is the author
-    const postQuery = `SELECT author_email FROM posts WHERE id = ?`;
+    // Check if post exists and get author info and creation time
+    const postQuery = `SELECT author_email, created_at FROM posts WHERE id = ?`;
     const postResult = await client.execute(postQuery, [postId], { prepare: true });
 
     if (postResult.rowLength === 0) {
@@ -966,10 +966,24 @@ router.delete('/:postId', verifyToken, async (req, res) => {
       });
     }
 
-    if (postResult.rows[0].author_email !== userEmail) {
+    const post = postResult.rows[0];
+
+    if (post.author_email !== userEmail) {
       return res.status(403).json({
         success: false,
         message: 'Only the author can delete this post'
+      });
+    }
+
+    // Check if post is within 24 hours
+    const postDate = new Date(post.created_at);
+    const now = new Date();
+    const diffHours = (now.getTime() - postDate.getTime()) / (1000 * 60 * 60);
+
+    if (diffHours > 24) {
+      return res.status(403).json({
+        success: false,
+        message: 'Posts can only be deleted within 24 hours of creation'
       });
     }
 

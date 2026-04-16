@@ -297,9 +297,25 @@ router.post("/teacher", verifyToken, async (req, res) => {
         teacher.qualifications = JSON.parse(teacher.qualifications || "[]");
         teacher.teachingmode = JSON.parse(teacher.teachingmode || "[]");
 
-        const tuitionsRaw = teacher.tuitions || teacher.tutions || "[]";
-        teacher.tuitions = JSON.parse(tuitionsRaw);
-        console.log("Tutions",tuitionsRaw)
+        // Fix: Check for both 'tuitions' (correct) and 'tutions' (typo) column names
+        // Cassandra returns lowercase column names
+        const tuitionsRaw = teacher.tuitions || teacher.tutions || teacher.tuitions || "[]";
+        let parsedTuitions = [];
+        try {
+            parsedTuitions = JSON.parse(tuitionsRaw);
+            console.log("✅ Parsed tuitions for", email, ":", parsedTuitions);
+        } catch (parseErr) {
+            console.error("❌ Failed to parse tuitions:", parseErr);
+            parsedTuitions = [];
+        }
+        
+        // Ensure each tuition has the board field properly set for Universities
+        teacher.tuitions = parsedTuitions.map(t => ({
+            ...t,
+            // Ensure board is set for university entries
+            board: t.board || (t.university ? 'Universities' : undefined)
+        }));
+        
         delete teacher.tutions;
 
         res.json(teacher);
@@ -373,6 +389,10 @@ router.post("/universities", verifyToken, async (req, res) => {
                 universityId: university.id,
                 universityName: university.name,
                 teacherCount: universityTeachers.length,
+                image: university.image || null,
+                location: university.location || null,
+                established: university.established || null,
+                type: university.type || null,
             };
         });
 
@@ -477,12 +497,51 @@ router.post("/universities/teachers", verifyToken, async (req, res) => {
         return res.status(400).json({ message: "University, year and subject are required" });
 
     try {
-        const result = await client.execute("SELECT * FROM teacher_info");
-        const flatTuitions = extractTuitions(result.rows).filter(
-            (t) => t.university === university && t.year === year && t.subject === subject
-        );
+        // Query from teachers1 table to get current data
+        const result = await client.execute("SELECT email, name, profilepic, introduction, tuitions FROM teachers1");
+        
+        const teachers = [];
+        for (const row of result.rows) {
+            let tuitions = row.tuitions;
+            if (typeof tuitions === 'string') {
+                try {
+                    tuitions = JSON.parse(tuitions);
+                } catch (err) {
+                    console.error("Failed to parse tuitions:", err);
+                    tuitions = [];
+                }
+            }
 
-        res.json(flatTuitions);
+            if (Array.isArray(tuitions) && tuitions.length > 0) {
+                const matchingTuitions = tuitions.filter(t => 
+                    t.university === university && t.year === year && t.subject === subject
+                );
+
+                if (matchingTuitions.length > 0) {
+                    for (const t of matchingTuitions) {
+                        teachers.push({
+                            email: row.email,
+                            name: row.name,
+                            profilePic: row.profilepic || "",
+                            university: t.university,
+                            universityId: t.universityId,
+                            year: t.year,
+                            yearId: t.yearId,
+                            subject: t.subject,
+                            charge: t.charge || "",
+                            day: t.day || "",
+                            timeFrom: t.timeFrom || "",
+                            timeTo: t.timeTo || "",
+                            description: row.introduction || "",
+                            language: row.language || "English",
+                        });
+                    }
+                }
+            }
+        }
+
+        console.log(`📊 Found ${teachers.length} teachers for university:`, { university, year, subject });
+        res.json(teachers);
     } catch (err) {
         console.error("Error fetching university teachers:", err);
         res.status(500).json({ message: "Internal server error" });

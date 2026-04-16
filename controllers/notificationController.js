@@ -158,13 +158,26 @@ exports.getUnreadCount = async (req, res) => {
         console.log(`👤 User role: ${userRole}`);
         
         // Get total notifications for this user's role AND 'all'
-        const notificationsQuery = `
-            SELECT id FROM notifications 
-            WHERE target_role IN (?, ?)
-        `;
+        let notificationsQuery;
+        let queryParams;
+        
+        if (userRole) {
+            notificationsQuery = `
+                SELECT id FROM notifications 
+                WHERE target_role IN (?, ?)
+            `;
+            queryParams = [userRole, 'all'];
+        } else {
+            notificationsQuery = `
+                SELECT id FROM notifications 
+                WHERE target_role = ?
+            `;
+            queryParams = ['all'];
+        }
+        
         const notificationsResult = await client.execute(
             notificationsQuery, 
-            [userRole, 'all'], 
+            queryParams, 
             { prepare: true }
         );
         

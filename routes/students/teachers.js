@@ -34,7 +34,7 @@ async function ensureRedis() {
  router.post("/teachers", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
     const searchQuery = req.body.search || "";
-    const { board, className, subject } = req.body;
+    const { board, className, subject, university, year } = req.body;
 
     const redisSpotlightKey = `teachersQueue:spotlight:`;
     const redisPopularKey = `teachersQueue:popular:`;
@@ -96,8 +96,39 @@ async function ensureRedis() {
             });
         }
 
-        // Apply board/class/subject filtering if provide
+        // Apply board/class/subject or university/year/subject filtering
         const filterTeachers = (teachers) => {
+            // University flow
+            if (university) {
+                console.log(`🔍 Filtering teachers by university:`, { university, year, subject });
+                
+                return teachers.filter(teacher => {
+                    let tuitions = teacher.tuitions;
+                    if (typeof tuitions === 'string') {
+                        try {
+                            tuitions = JSON.parse(tuitions);
+                        } catch (err) {
+                            console.error("Failed to parse tuitions:", err);
+                            tuitions = [];
+                        }
+                    }
+
+                    if (Array.isArray(tuitions) && tuitions.length > 0) {
+                        const hasMatch = tuitions.some(tuition => {
+                            const universityMatch = !university || (tuition.university && tuition.university === university);
+                            const yearMatch = !year || (tuition.year && tuition.year === year);
+                            const subjectMatch = !subject || (tuition.subject && tuition.subject === subject);
+                            
+                            return universityMatch && yearMatch && subjectMatch;
+                        });
+                        
+                        return hasMatch;
+                    }
+                    return false;
+                });
+            }
+            
+            // Board flow (original)
             if (!board && !className && !subject) {
                 return teachers;
             }
@@ -145,6 +176,8 @@ async function ensureRedis() {
             board,
             className, 
             subject,
+            university,
+            year,
             spotlightBefore: spotlightRotated.length,
             popularBefore: popularRotated.length,
             spotlightAfter: filteredSpotlight.length,

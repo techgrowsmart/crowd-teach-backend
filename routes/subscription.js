@@ -56,8 +56,25 @@ createUserSubscriptionsTable();
 router.post("/create-order", verifyToken, async (req, res) => {
   try {
     const { amount } = req.body;
+    
+    // Parse amount - remove any currency symbols and convert to number
+    const parsedAmount = parseFloat(String(amount).replace(/[^0-9.]/g, '')) || 0;
+    
+    if (parsedAmount === 0) {
+      // Free order (Intro Offer) - return mock order without Razorpay call
+      return res.json({
+        success: true,
+        order: {
+          id: `free_order_${Date.now()}`,
+          amount: 0,
+          currency: 'INR',
+          receipt: `receipt_${Date.now()}`
+        }
+      });
+    }
+    
     const options = {
-      amount: amount * 100, // Razorpay expects amount in paise
+      amount: parsedAmount * 100, // Razorpay expects amount in paise
       currency: 'INR',
       receipt: `receipt_${Date.now()}`
     };
@@ -77,34 +94,47 @@ router.post("/create-order", verifyToken, async (req, res) => {
 // Create subscription after payment verification
 router.post("/create-subscription", verifyToken, async (req, res) => {
   try {
-    const { plan_title, amount, payment_id, order_id, signature } = req.body;
+    const { plan_title, amount, payment_id, order_id, signature, is_intro_offer, duration } = req.body;
     const user_email = req.user.email;
     
-    if (!plan_title || !amount || !payment_id || !order_id || !signature) {
+    if (!plan_title || !amount) {
       return res.status(400).json({ 
         success: false, 
-        message: "All payment details are required" 
+        message: "Plan title and amount are required" 
       });
     }
 
-    // Verify the payment signature
-    const generated_signature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(order_id + "|" + payment_id)
-      .digest('hex');
+    // For paid subscriptions, verify payment signature
+    const parsedAmount = parseFloat(amount);
+    if (parsedAmount > 0) {
+      if (!payment_id || !order_id || !signature) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Payment details are required for paid subscriptions" 
+        });
+      }
 
-    if (generated_signature !== signature) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Payment verification failed" 
-      });
+      // Verify the payment signature
+      const generated_signature = crypto
+        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(order_id + "|" + payment_id)
+        .digest('hex');
+
+      if (generated_signature !== signature) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Payment verification failed" 
+        });
+      }
     }
 
     const startDate = new Date();
     const endDate = new Date();
     
     // Set validity based on plan
-    if (plan_title === "TeachLite") {
+    if (plan_title === "Intro Offer") {
+      endDate.setDate(startDate.getDate() + 365);
+    } else if (plan_title === "TeachLite") {
       endDate.setDate(startDate.getDate() + 90);
     } else if (plan_title === "TeachStart") {
       endDate.setDate(startDate.getDate() + 180);

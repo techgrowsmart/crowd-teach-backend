@@ -2,7 +2,6 @@ const express = require("express");
 const { v4: uuidv4 } = require("uuid");
 const nodemailer = require("nodemailer");
 const cassandra = require("cassandra-driver");
-const rateLimiter = require("../middleware/rateLimiter");
 
 const router = express.Router();
 const client = require("../config/db");
@@ -27,119 +26,67 @@ const upload = multer({
     })
 });
 
-// Generate OTP
+
 const generateOTP = () => Math.floor(1000 + Math.random() * 9000).toString();
 
-const toTimestamp = () => new Date().toISOString();
 
-// Signup route
 router.post("/signup", async (req, res) => {
     try {
-        const { fullName, phonenumber, email, role = 'student' } = req.body;
-        
-        // Validation
+        const { fullName,phonenumber,email } = req.body;
         if (!email) return res.status(400).json({ message: "❌ Email is required" });
-        if (!fullName) return res.status(400).json({ message: "❌ Full Name is required" });
-        if (!phonenumber) return res.status(400).json({ message: "❌ Phone Number is required" });
-        
+        if (!fullName) return  res.status(400).json({message:"❌ Full Name is required"})
+        if (!phonenumber) return  res.status(400).json({message:"❌ Phone Number is required"})
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
-        // Check if user already exists in ANY table (users, teachers1, student)
+
         try {
-            // Check users table
-            const checkUserQuery = "SELECT email, status FROM users WHERE email = ? ALLOW FILTERING";
+            const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
             const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
 
             if (userResult.rowLength > 0) {
-                const user = userResult.rows[0];
-                if (user.status === "active" || user.status === "dormant") {
-                    return res.status(409).json({
+                if (userResult.rows[0].status === "active") {
+                    return res.status(400).json({
                         message: "❌ This email is already registered. Please login instead.",
-                        alreadyRegistered: true,
-                        status: user.status
+                        alreadyRegistered: true
                     });
                 }
             }
-
-            // Check teachers1 table
-            const checkTeacherQuery = "SELECT email FROM teachers1 WHERE email = ?";
-            const teacherResult = await client.execute(checkTeacherQuery, [email], { prepare: true });
-
-            if (teacherResult.rowLength > 0) {
-                return res.status(409).json({
-                    message: "❌ This email is already registered as a teacher. Please login instead.",
-                    alreadyRegistered: true,
-                    role: "teacher"
-                });
-            }
-
-            // Check student table
-            const checkStudentQuery = "SELECT email FROM student WHERE email = ?";
-            const studentResult = await client.execute(checkStudentQuery, [email], { prepare: true });
-
-            if (studentResult.rowLength > 0) {
-                return res.status(409).json({
-                    message: "❌ This email is already registered as a student. Please login instead.",
-                    alreadyRegistered: true,
-                    role: "student"
-                });
-            }
-
         } catch (checkError) {
-            console.error("Error checking existing user:", checkError);
-            return res.status(500).json({
-                message: "❌ Error checking user registration status. Please try again.",
-                error: checkError.message
-            });
+            console.error("Error checking user:", checkError);
         }
 
-        // Generate OTP
         const otp = generateOTP();
-        console.log("Generated OTP for:", email);
+        console.log("otp",otp)
         const otpId = uuidv4();
         const expirationTime = new Date(Date.now() + 2 * 60 * 1000);
 
-        // Store OTP
         const query = "INSERT INTO otp_table (id, email, otp, expires_at) VALUES (?, ?, ?, ?)";
         const params = [otpId, email, otp, expirationTime];
         await client.execute(query, params, { prepare: true });
 
-        // Send OTP email
         const mailOptions = {
             from: `Your App <${process.env.EMAIL_USER}>`,
             to: email,
             subject: "Your OTP Code",
-            text: `Your OTP code is: ${otp}. It is valid for 2 minutes.\n\nAccount Details:\nName: ${fullName}\nPhone: ${phonenumber}\nRole: ${role}`,
+            text: `Your OTP code is: ${otp}. It is valid for 2 minutes.`,
         };
 
-        try {
-            await transporter.sendMail(mailOptions);
-            console.log("✅ OTP Sent Successfully!");
-        } catch (emailError) {
-            console.error("❌ Error sending OTP via email:", emailError);
-            console.log(`🔧 FALLBACK: OTP for ${email} is: ${otp} (valid for 2 minutes)`);
-            // Continue with flow even if email fails
-        }
+        await transporter.sendMail(mailOptions);
 
-        res.json({ 
-            message: "✅ OTP sent successfully", 
-            otpId,
-            userData: { fullName, phonenumber, email, role }
-        });
+        res.json({ message: "✅ OTP sent successfully", otpId });
     } catch (error) {
-        console.error("❌ Signup error:", error);
-        res.status(500).json({ message: "❌ Internal server error" });
+        console.error("❌ Error sending OTP:", error.message);
+        res.status(500).json({ message: "Failed to send OTP" });
     }
 });
 
-// Verify OTP route
 router.post("/signup/verify-otp", async (req, res) => {
     try {
-        const { email, otp, name, role, phone } = req.body;
+        const { email, otp } = req.body;
         
-        console.log("🔍 OTP verification request:", { email, otp, name, role, phone });
+        console.log("🔍 OTP verification request:", { email, otp });
         
         if (!email || !otp) {
             return res.status(400).json({ message: "❌ Email and OTP are required" });
@@ -179,12 +126,12 @@ router.post("/signup/verify-otp", async (req, res) => {
 
         // Create user in database
         const userId = uuidv4();
-        const userQuery = "INSERT INTO users (id, email, name, role, status, created_at) VALUES (?, ?, ?, ?, ?, ?)";
-        await client.execute(userQuery, [userId, email, name || email.split('@')[0], role || 'student', 'active', new Date()], { prepare: true });
+        const userQuery = "INSERT INTO users (id, email, name, phonenumber, created_at) VALUES (?, ?, ?, ?, ?)";
+        await client.execute(userQuery, [userId, email, req.body.name || email.split('@')[0], req.body.phonenumber, new Date()], { prepare: true });
 
         // Generate real JWT token
         const token = jwt.sign(
-            { userId, email, role: role || 'student' },
+            { userId, email },
             process.env.JWT_SECRET_KEY,
             { expiresIn: '7d' }
         );
@@ -193,9 +140,8 @@ router.post("/signup/verify-otp", async (req, res) => {
             success: true,
             message: "✅ Account created successfully",
             token: token,
-            role: role || 'student',
             email: email,
-            name: name || email.split('@')[0],
+            name: req.body.name || email.split('@')[0],
             userId: userId
         });
     } catch (error) {
@@ -204,19 +150,17 @@ router.post("/signup/verify-otp", async (req, res) => {
     }
 });
 
+
 router.post(
     "/register",
-    upload.fields([
-        { name: "panUpload", maxCount: 1 },
-        { name: "aadhar_front", maxCount: 1 },  // ✅ NEW FIELD NAME
-        { name: "aadhar_back", maxCount: 1 },   // ✅ NEW FIELD NAME
-        { name: "selfieWith_addhar_front", maxCount: 1 },
-        { name: "selfieWith_aadhar_back", maxCount: 1 },
-        { name: "certification", maxCount: 5 },
-        { name: "heighest_qualification", maxCount: 5 },
-    ]),
+    upload.any(),
     async (req, res) => {
         try {
+            console.log("📝 Teacher registration request received");
+            console.log("📊 Request body fields:", Object.keys(req.body));
+            console.log("📊 Request files:", Object.keys(req.files || {}));
+            console.log("📊 Request body data:", req.body);
+
             const {
                 userId,
                 fullname,
@@ -228,6 +172,16 @@ router.post(
                 experience,
                 specialization,
             } = req.body;
+
+            // Validate required fields
+            if (!email || !fullname || !phoneNumber) {
+                console.error("❌ Missing required fields:", { email, fullname, phoneNumber });
+                return res.status(400).json({ 
+                    success: false,
+                    message: "Email, full name, and phone number are required",
+                    received: { email, fullname, phoneNumber }
+                });
+            }
 
             const getFileUrl = (field) =>
                 req.files[field]?.[0]?.location || null;
@@ -244,24 +198,35 @@ router.post(
             const heighestQualificationUrls = getArrayFileUrls("heighest_qualification");
             const certificationUrls = getArrayFileUrls("certification");
 
+            console.log("📊 File URLs:", {
+                aadharFrontUrl: !!aadharFrontUrl,
+                aadharBackUrl: !!aadharBackUrl,
+                panUrl: !!panUrl,
+                selfieWithaadharFrontUrl: !!selfieWithaadharFrontUrl,
+                selfieWithaadharBackUrl: !!selfieWithaadharBackUrl,
+                heighestQualificationUrls: heighestQualificationUrls.length,
+                certificationUrls: certificationUrls.length
+            });
+
           const query = `
                 INSERT INTO tutors(
                     id, email, aadhar_front, aadhar_back, certification, country, experience, full_name,
-                    heighest_qualification_certification, pan, phone_number, residentialAddress,
+                    heighest_degree, heighest_qualification_certification, pan, phone_number, residentialaddress,
                     selfie_with_aadhar_back, selfie_with_aadhar_front, specialization, state
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const values = [
-                userId,
+                (!userId || userId === 'null' || userId === 'undefined') ? uuidv4() : userId,
                 email,
-                aadharFrontUrl,    // ✅ NEW
-                aadharBackUrl,     // ✅ NEW
+                aadharFrontUrl,
+                aadharBackUrl,
                 certificationUrls,
                 country,
                 experience,
                 fullname,
+                req.body.highest_degree || '',
                 heighestQualificationUrls,
                 panUrl,
                 phoneNumber,
@@ -272,12 +237,19 @@ router.post(
                 state,
             ];
 
+            console.log("✅ Inserting into AstraDB tutors table with values:", {
+                id: values[0],
+                email: values[1],
+                full_name: values[7]
+            });
+
             await client.execute(query, values, { prepare: true });
 
             res.status(200).json({ message: "Your Documents Submitted." });
         } catch (error) {
             console.error("❌ Error Registration error:", error.message);
-            res.status(500).json({ message: "Failed to Register" });
+            console.error("❌ Full error details:", error);
+            res.status(500).json({ message: "Failed to Register", error: error.message });
         }
     }
 );

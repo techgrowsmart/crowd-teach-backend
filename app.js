@@ -21,20 +21,31 @@ const { initializeOptimizedDB } = require('./config/db-optimized');
 app.use(rateLimiter.generalLimiter);
 app.use(timeout.requestTimeout(30000)); // 30 second timeout
 
-// CORS configuration - allow frontend origin
+// CORS configuration - Production ready for portal.gogrowsmart.com
 const corsOptions = {
-  origin: [
-    'http://localhost:8081', 
-    'http://localhost:19006', 
-    'https://growsmartserver.gogrowsmart.com',
-    'https://portal.gogrowsmart.com',
-    'https://app.growsmart.com',
-    'https://gogrowsmart.com'
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Allow localhost for development (any port)
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+    
+    // Allow all gogrowsmart.com subdomains (production)
+    if (origin.includes('gogrowsmart.com') || 
+        origin.endsWith('.gogrowsmart.com')) {
+      return callback(null, true);
+    }
+    
+    callback(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-Test-User'],
   credentials: true,
-  maxAge: 86400
+  maxAge: 86400,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
@@ -82,6 +93,10 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync('./certs/privkey.pem'
   }
 }
 
+// Initialize Socket.io
+const { initSocket } = require('./socket');
+const io = initSocket(httpServer);
+console.log('📡 Socket.io initialized for real-time communication');
 
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -195,7 +210,9 @@ app.use("/api",getProfie)
 app.use("/api",valuesToselect)
 app.use("/api",teachers)
 app.use("/api",allboards)
-app.use("/api",messages)
+//for create subject - register before messages to prevent route collision
+app.use("/api", createSubject);
+app.use("/api/messages",messages)
 app.use("/api",myTutors)
 app.use('/api/payments', paymentRoutes);
 app.use("/api",walletBalence)
@@ -203,8 +220,6 @@ app.use("/api/review",review)
 
 app.use("/api",connectionRequest)
 app.use("/api",addonClass)
-//for create subject
-app.use("/api", createSubject);
 
 app.use("/api", notificationRoutes);
 // for teacherInfoRoutes
@@ -222,6 +237,28 @@ app.use("/api/posts", postsRoutes);
 const userProfileRoutes = require('./routes/userProfile');
 app.use("/api/userProfile", userProfileRoutes);
 
+// Missing API endpoints for production
+const teacherReviewsRoutes = require("./routes/teacher-reviews");
+app.use("/api", teacherReviewsRoutes);
+
+const contactsRoutes = require("./routes/contacts");
+app.use("/api", contactsRoutes);
+
+const enrollmentDataRoutes = require("./routes/enrollment-data");
+app.use("/api", enrollmentDataRoutes);
+
+// Booking routes for real-time class booking requests
+const { router: bookingRoutes, initBookingTable } = require('./routes/booking');
+app.use("/api/bookings", bookingRoutes);
+
+// Teacher contacts route
+const teacherContactsRoutes = require('./routes/teacher-contacts');
+app.use("/api/teacher", teacherContactsRoutes);
+
+// Teacher enrolled students route
+const teacherEnrolledStudentsRoutes = require('./routes/teacher-enrolled-students');
+app.use("/api/teacher", teacherEnrolledStudentsRoutes);
+
 // const client = new cassandra.Client({
 //
 //   contactPoints: ['127.0.0.1'],
@@ -237,6 +274,11 @@ const credentials = {
   password: process.env.ASTRA_DB_PASSWORD
 };
 const client = new cassandra.Client({ keyspace: process.env.ASTRA_DB_KEYSPACE, cloud, authProvider,  credentials});
+
+// Initialize booking table on server startup
+initBookingTable(client).catch(err => {
+  console.error('❌ Failed to initialize booking table:', err);
+});
 
 async function createFavoriteTeachersTable() {
     try {
@@ -662,50 +704,71 @@ app.post("/api/book-class", verifyToken, verifySubscription, async (req, res) =>
 
 app.post("/api/add-bank-details", verifyToken, async (req, res) => {
   try {
+    const { TeacherBankDetails } = require('./models/TeacherDetails');
     const email = req.user.email;
-
-
-    const getUserQuery = "SELECT id FROM users WHERE email = ? ALLOW FILTERING";
-    const result = await client.execute(getUserQuery, [email], { prepare: true });
-
-    if (result.rowLength === 0) {
-      return res.status(404).json({ message: "❌ User not found" });
-    }
-
-    const userId = result.rows[0].id;
 
     const {
       account_number,
       ifsc_code,
       bank_name,
-      account_holder_name,pan,pincode
+      account_holder_name,
+      pan,
+      pincode
     } = req.body;
 
-    if (!account_number || !ifsc_code || !bank_name || !account_holder_name || !pan) {
-      return res.status(400).json({ message: "❌ All bank details are required" });
+    if (!account_number || !ifsc_code || !bank_name || !account_holder_name || !pan || !pincode) {
+      return res.status(400).json({ 
+        success: false,
+        message: "All bank details are required" 
+      });
     }
 
-    const insertQuery = `
-      INSERT INTO bank_details (user_id, email, account_number, ifsc_code, bank_name, account_holder_name,pan,pincode, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+    // Check if bank details already exist
+    const existingDetails = await TeacherBankDetails.findOne({ teacher_email: email });
+    if (existingDetails) {
+      // Update existing details
+      existingDetails.account_number = account_number;
+      existingDetails.ifsc_code = ifsc_code;
+      existingDetails.bank_name = bank_name;
+      existingDetails.account_holder_name = account_holder_name;
+      existingDetails.pan = pan;
+      existingDetails.pincode = pincode;
+      existingDetails.status = 'pending'; // Reset to pending for review
+      existingDetails.updated_at = new Date();
+      
+      await existingDetails.save();
+      
+      return res.status(200).json({ 
+        success: true,
+        message: "Bank details updated successfully. Your profile is under review." 
+      });
+    }
 
-    await client.execute(insertQuery, [
-      userId,
-      email,
+    // Create new bank details
+    const bankDetails = new TeacherBankDetails({
+      teacher_email: email,
       account_number,
       ifsc_code,
       bank_name,
       account_holder_name,
       pan,
       pincode,
-      new Date()
-    ], { prepare: true });
+      status: 'pending'
+    });
 
-    return res.status(200).json({ message: "Your Documents Submitted successfully.Your Profile Under Review" });
+    await bankDetails.save();
+
+    return res.status(200).json({ 
+      success: true,
+      message: "Bank details submitted successfully. Your profile is under review." 
+    });
+
   } catch (error) {
-    console.error("❌ Error saving bank details:", error.message);
-    return res.status(500).json({ message: "❌ Failed to save bank details" });
+    console.error("❌ Error saving bank details:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to save bank details" 
+    });
   }
 });
 const uploadImg = multer({
@@ -866,6 +929,35 @@ const getSkillID = (skillName, jsonData) => {
   }
   return null;
 };
+
+// Get university+year ID for Universities board entries
+const getUniversityYearId = (universityName, yearName, jsonData) => {
+  for (const category of jsonData) {
+    if (category.name === "Subject teacher") {
+      for (const board of category.boards) {
+        if (board.name === "Universities") {
+          for (const uni of board.universities || []) {
+            if (uni.name === universityName) {
+              for (const year of uni.years || []) {
+                if (year.name === yearName) {
+                  return `${uni.id}_${year.id}`;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // Fallback: create a safe ID from university and year names
+  if (universityName && yearName) {
+    const safeUni = universityName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    const safeYear = yearName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    return `uni_${safeUni}_${safeYear}`;
+  }
+  return null;
+};
+
 app.post("/api/teacherss",  upload.single("profileimage"), async (req, res) => {
   const {
     fullName,
@@ -899,10 +991,19 @@ console.log("Cate",req.body)
   try {
     const tuitionsWithIds = tuitions.map(tuition => {
       if (category === "Subject teacher") {
-        return {
-          ...tuition,
-          classId: getClassId(tuition.board, tuition.class, classBoardData),
-        };
+        // For Universities board, use university+year ID instead of classId
+        if (tuition.board === 'Universities') {
+          const uniYearId = getUniversityYearId(tuition.university, tuition.year, classBoardData);
+          return {
+            ...tuition,
+            classId: uniYearId, // Use university_year ID as the grouping key
+          };
+        } else {
+          return {
+            ...tuition,
+            classId: getClassId(tuition.board, tuition.class, classBoardData),
+          };
+        }
       } else {
         return {
           ...tuition,

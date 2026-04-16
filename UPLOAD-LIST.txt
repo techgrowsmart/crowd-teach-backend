@@ -1,0 +1,61 @@
+FILES TO UPLOAD TO api.gogrowsmart.com (File Manager)
+====================================================
+
+Upload these to: public_html/
+
+REQUIRED FILES:
+---------------
+1. .htaccess (created for you)
+2. passenger.js (created for you)
+3. app.js
+4. socket.js
+5. package.json
+6. package-lock.json
+7. .env.production (rename to .env after upload)
+8. secure-connect-gogrowsmart.zip
+
+REQUIRED FOLDERS:
+-----------------
+9. config/
+10. routes/
+11. middleware/
+12. models/
+13. utils/
+14. services/
+15. controllers/
+16. views/
+
+DO NOT UPLOAD:
+--------------
+- node_modules/ (will be created by npm install)
+- .git/ (git folder)
+- logs/ (will be created)
+- uploads/ (will be created)
+- tests/ (not needed for production)
+- scripts/ (not needed for production)
+- exports/ (not needed for production)
+- android-signing-backup/ (not needed)
+- certs/ (not needed)
+- bin/ (not needed)
+- *.log files
+- *.tar.gz files
+- *.md files (documentation)
+- *.sh files (scripts)
+- .DS_Store
+
+AFTER UPLOAD:
+-------------
+1. Rename .env.production to .env
+2. Go to Hostinger Panel → Advanced → Node.js
+3. Create Application:
+   - Node.js Version: 20.x
+   - Application Root: public_html
+   - Application URL: api.gogrowsmart.com
+   - Application Startup File: passenger.js
+   - Environment: production
+4. Click "NPM Install" button (or run npm install)
+5. Click "Restart"
+
+TEST:
+-----
+Visit: https://api.gogrowsmart.com/health

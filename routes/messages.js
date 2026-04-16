@@ -97,7 +97,7 @@ router.post("/broadcast", verifyToken, async (req, res) => {
             timestamp: admin.firestore.Timestamp.now()
         });
 
-        const batch = db.batch();
+        const batch = admin.firestore().batch();
 
 
         const messageContent = `📢 Broadcast: ${broadcastData.topic}\nDate: ${broadcastData.date}\nTime: ${broadcastData.time}\nLink: ${broadcastData.link}`;
@@ -228,6 +228,47 @@ router.post("/get_teacher_broadcast",verifyToken, async (req, res) => {
     for (const result of results.rows) {
         resultBody.push(JSON.parse(JSON.stringify(result)))
     }
+
+    // Initialize Firestore conversations for each student in broadcast
+    try {
+        const batch = admin.firestore().batch();
+        const processedChats = new Set();
+
+        for (const student of resultBody) {
+            if (student.studentemail) {
+                const chatId = [userEmail, student.studentemail].sort().join('_');
+                
+                // Skip if already processed this chat
+                if (processedChats.has(chatId)) continue;
+                processedChats.add(chatId);
+
+                // Check if chat already has messages
+                const chatRef = db.collection("chats").doc(chatId);
+                const messagesSnapshot = await chatRef.collection("messages").limit(1).get();
+                
+                // Only create placeholder if no messages exist
+                if (messagesSnapshot.empty) {
+                    const placeholderRef = chatRef.collection("messages").doc();
+                    batch.set(placeholderRef, {
+                        text: "",
+                        sender: userEmail,
+                        recipient: student.studentemail,
+                        timestamp: admin.firestore.Timestamp.now(),
+                        isPlaceholder: true
+                    });
+                }
+            }
+        }
+
+        if (processedChats.size > 0) {
+            await batch.commit();
+            console.log(`✅ Initialized ${processedChats.size} Firestore conversations for broadcast students`);
+        }
+    } catch (firestoreErr) {
+        console.error("❌ Error initializing Firestore conversations:", firestoreErr);
+        // Continue even if Firestore fails, return Cassandra data
+    }
+
     res.status(200).json({ teacherBroadcastData: resultBody });
 })
 
@@ -291,20 +332,28 @@ router.post("/broadcast-message-list-add",verifyToken, async (req, res) => {
     ];
 
     try {
+        console.log("📤 Starting broadcast insert with params:", params);
         await client.execute(query, params, { prepare: true });
-        console.log("✅ Broadcast message inserted successfully");
+        console.log("✅ Broadcast message inserted successfully to Cassandra");
 
+        let broadcastRef;
+        try {
+            broadcastRef = await db.collection("broadcasts").add({
+                params,
+                teacherEmail,
+                className,
+                status: "processing",
+                studentCount: studentEmails.length,
+                timestamp: admin.firestore.Timestamp.now()
+            });
+            console.log("✅ Firebase broadcast document created with ID:", broadcastRef.id);
+        } catch (firebaseErr) {
+            console.error("❌ Firebase broadcast creation error:", firebaseErr);
+            // Continue even if Firebase fails, the Cassandra insert succeeded
+        }
 
-        const broadcastRef = await db.collection("broadcasts").add({
-            params,
-            teacherEmail,
-            className,
-            status: "processing",
-            studentCount: studentEmails.length,
-            timestamp: admin.firestore.Timestamp.now()
-        }).catch(err => {console.log(err)});
-
-        const batch = db.batch();
+        const batch = admin.firestore().batch();
+        console.log("📝 Processing", studentEmails.length, "students for Firebase batch operations");
 
         for (let i=0; i<studentEmails.length; i++) {
             const studentEmail = studentEmails[i];
@@ -313,11 +362,9 @@ router.post("/broadcast-message-list-add",verifyToken, async (req, res) => {
             const chatId = [teacherEmail, studentEmail].sort().join('_');
 
             const messageDocRef = db.collection("chats").doc(chatId).collection("messages").doc();
-            const broadcastDocRef = db.collection("broadcasts").doc(broadcastRef.id);
-            const recipientDocRef = broadcastDocRef.collection("recipients").doc(studentEmail);
             const notificationRef = db.collection("notifications").doc(studentEmail);
 
-
+            // Add message to chat (always happens)
             batch.set(messageDocRef, {
                 text: messageContent,
                 sender: teacherEmail,
@@ -326,24 +373,30 @@ router.post("/broadcast-message-list-add",verifyToken, async (req, res) => {
                 isBroadcast: true
             });
 
-            batch.set(recipientDocRef, {
-                studentEmail,
-                studentName,
-                timestamp: admin.firestore.Timestamp.now(),
-            });
-
-
+            // Add notification (always happens)
             batch.set(notificationRef, {
                 type: "broadcast",
                 message: messageContent,
                 timestamp: admin.firestore.Timestamp.now(),
-                broadcastId: broadcastRef.id
+                broadcastId: broadcastRef ? broadcastRef.id : null
             });
 
-            batch.update(broadcastDocRef, {
-                status: "sent",
-                [`sentTo.${studentEmail}`]: true
-            });
+            // Only use broadcastRef if Firebase creation succeeded
+            if (broadcastRef) {
+                const broadcastDocRef = db.collection("broadcasts").doc(broadcastRef.id);
+                const recipientDocRef = broadcastDocRef.collection("recipients").doc(studentEmail);
+
+                batch.set(recipientDocRef, {
+                    studentEmail,
+                    studentName,
+                    timestamp: admin.firestore.Timestamp.now(),
+                });
+
+                batch.update(broadcastDocRef, {
+                    status: "sent",
+                    [`sentTo.${studentEmail}`]: true
+                });
+            }
 
             // Send push notification
             (async () => {
@@ -364,18 +417,152 @@ router.post("/broadcast-message-list-add",verifyToken, async (req, res) => {
             })();
 
         };
+
+        console.log("💾 Committing Firebase batch...");
         await batch.commit();
+        console.log("✅ Firebase batch committed successfully");
         return res.status(200).json({ type: "success" });
     } catch (err) {
         console.error("❌ Error inserting broadcast message:", err);
+        console.error("❌ Error stack:", err.stack);
+        return res.status(500).json({ type: "error", message: "Server error", details: err.message });
     }
-
-    return res.status(500).json({ type: "error", message: "Server error" });
 })
 
 
 
 
 
+
+// Get chat messages - supports both /:contactEmail and ?chatId= query param
+router.get("/", verifyToken, async (req, res) => {
+    try {
+        // Support query param format: ?chatId=email1_email2
+        const chatIdFromQuery = req.query.chatId;
+        const currentUserEmail = req.user?.email || req.query.userEmail;
+        
+        if (!currentUserEmail) {
+            return res.status(400).json({ 
+                success: false,
+                error: "Current user email required" 
+            });
+        }
+        
+        if (!chatIdFromQuery) {
+            return res.status(400).json({ 
+                success: false,
+                error: "chatId query parameter required" 
+            });
+        }
+        
+        // Parse chatId to get the other person's email
+        const emails = chatIdFromQuery.split('_');
+        const contactEmail = emails.find(e => e !== currentUserEmail) || emails[1];
+        
+        console.log(`🔍 [Query] Fetching messages between ${currentUserEmail} and ${contactEmail}`);
+        
+        // Create chat ID by sorting emails alphabetically
+        const chatId = [currentUserEmail, contactEmail].sort().join("_");
+        
+        // Fetch messages from Firebase
+        const messagesSnapshot = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .orderBy("timestamp", "asc")
+            .get();
+        
+        const messages = [];
+        messagesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            messages.push({
+                id: doc.id,
+                sender: data.sender,
+                recipient: data.recipient,
+                text: data.text,
+                timestamp: data.timestamp?.toDate()?.toISOString() || new Date().toISOString(),
+                isBroadcast: data.isBroadcast || false
+            });
+        });
+        
+        console.log(`✅ [Query] Found ${messages.length} messages`);
+        
+        return res.status(200).json({
+            success: true,
+            messages: messages,
+            chatId: chatId
+        });
+        
+    } catch (error) {
+        console.error("❌ Error fetching messages (query):", error);
+        return res.status(500).json({ 
+            success: false,
+            error: "Failed to fetch messages" 
+        });
+    }
+});
+
+// Get chat messages between current user and contact (URL param format)
+router.get("/:contactEmail", verifyToken, async (req, res) => {
+    try {
+        const { contactEmail } = req.params;
+        const currentUserEmail = req.user?.email || req.query.userEmail;
+        
+        if (!currentUserEmail) {
+            return res.status(400).json({ 
+                success: false,
+                error: "Current user email required" 
+            });
+        }
+        
+        if (!contactEmail) {
+            return res.status(400).json({ 
+                success: false,
+                error: "Contact email required" 
+            });
+        }
+        
+        console.log(`🔍 Fetching messages between ${currentUserEmail} and ${contactEmail}`);
+        
+        // Create chat ID by sorting emails alphabetically
+        const chatId = [currentUserEmail, contactEmail].sort().join("_");
+        
+        // Fetch messages from Firebase
+        const messagesSnapshot = await db
+            .collection("chats")
+            .doc(chatId)
+            .collection("messages")
+            .orderBy("timestamp", "asc")
+            .get();
+        
+        const messages = [];
+        messagesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            messages.push({
+                id: doc.id,
+                sender: data.sender,
+                recipient: data.recipient,
+                text: data.text,
+                timestamp: data.timestamp?.toDate()?.toISOString() || new Date().toISOString(),
+                isBroadcast: data.isBroadcast || false
+            });
+        });
+        
+        console.log(`✅ Found ${messages.length} messages`);
+        
+        return res.status(200).json({
+            success: true,
+            messages: messages,
+            chatId: chatId
+        });
+        
+    } catch (error) {
+        console.error("❌ Error fetching messages:", error);
+        return res.status(500).json({ 
+            success: false,
+            error: "Failed to fetch messages" 
+        });
+    }
+});
 
 module.exports = router;

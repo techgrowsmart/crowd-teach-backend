@@ -37,7 +37,15 @@ const preloadTeachersToQueue = async () => {
     const parsed = JSON.parse(JSON.stringify(result.rows));
 
     for (let teacher of parsed) {
-        const tuitionParsed = JSON.parse(teacher.tuitions);
+        let tuitionParsed = [];
+        try {
+            if (teacher.tuitions) {
+                const parsed = JSON.parse(teacher.tuitions);
+                tuitionParsed = Array.isArray(parsed) ? parsed : [];
+            }
+        } catch (e) {
+            tuitionParsed = [];
+        }
         for (let tuition of tuitionParsed) {
             const item = JSON.parse(JSON.stringify(teacher));
             item.class = tuition.class;
