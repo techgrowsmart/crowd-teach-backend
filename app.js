@@ -17,6 +17,11 @@ const rateLimiter = require('./middleware/rateLimiter');
 const timeout = require('./middleware/timeout');
 const { initializeOptimizedDB } = require('./config/db-optimized');
 
+// Health check endpoint - bypass rate limiting for Docker healthchecks
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
+});
+
 // Apply global middleware
 app.use(rateLimiter.generalLimiter);
 app.use(timeout.requestTimeout(30000)); // 30 second timeout

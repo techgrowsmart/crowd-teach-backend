@@ -20,6 +20,11 @@ const getRedisClient = () => {
   };
 };
 
+// Helper to check if IP is Docker internal
+const isDockerInternalIP = (ip) => {
+  return ip.startsWith('172.') || ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+};
+
 // General rate limiter - DISABLED in development
 const generalLimiter = process.env.NODE_ENV === 'production' ? rateLimit({
   store: getRedisClient() ? new RedisStore({
@@ -34,6 +39,7 @@ const generalLimiter = process.env.NODE_ENV === 'production' ? rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => isDockerInternalIP(req.ip), // Skip rate limiting for Docker internal IPs
   handler: (req, res) => {
     console.log(`🚫 Rate limit exceeded for IP: ${req.ip}`);
     res.status(429).json({
