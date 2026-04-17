@@ -25,151 +25,23 @@ const isDockerInternalIP = (ip) => {
   return ip.startsWith('172.') || ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
 };
 
-// General rate limiter - DISABLED in development
-const generalLimiter = process.env.NODE_ENV === 'production' ? rateLimit({
-  store: getRedisClient() ? new RedisStore({
-    ...getRedisClient(),
-    prefix: 'rl:general:'
-  }) : undefined,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => isDockerInternalIP(req.ip), // Skip rate limiting for Docker internal IPs
-  handler: (req, res) => {
-    console.log(`🚫 Rate limit exceeded for IP: ${req.ip}`);
-    res.status(429).json({
-      error: 'Too many requests',
-      message: 'Too many requests from this IP, please try again later.',
-      retryAfter: '15 minutes'
-    });
-  }
-}) : (req, res, next) => next(); // Skip in development
+// General rate limiter - DISABLED
+const generalLimiter = (req, res, next) => next();
 
-// Strict rate limiter for auth endpoints
-const authLimiter = rateLimit({
-  store: getRedisClient() ? new RedisStore({
-    ...getRedisClient(),
-    prefix: 'rl:auth:'
-  }) : undefined,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Limit each IP to 20 auth requests per windowMs
-  message: {
-    error: 'Too many authentication attempts, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    console.log(`🚫 Auth rate limit exceeded for IP: ${req.ip}`);
-    res.status(429).json({
-      error: 'Too many authentication attempts',
-      message: 'Too many authentication attempts, please try again later.',
-      retryAfter: '15 minutes'
-    });
-  }
-});
+// Strict rate limiter for auth endpoints - DISABLED
+const authLimiter = (req, res, next) => next();
 
-// Very strict rate limiter for signup
-const signupLimiter = rateLimit({
-  store: getRedisClient() ? new RedisStore({
-    ...getRedisClient(),
-    prefix: 'rl:signup:'
-  }) : undefined,
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // Limit each IP to 5 signup attempts per hour
-  message: {
-    error: 'Too many signup attempts, please try again later.',
-    retryAfter: '1 hour'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    console.log(`🚫 Signup rate limit exceeded for IP: ${req.ip}`);
-    res.status(429).json({
-      error: 'Too many signup attempts',
-      message: 'Too many signup attempts, please try again later.',
-      retryAfter: '1 hour'
-    });
-  }
-});
+// Very strict rate limiter for signup - DISABLED
+const signupLimiter = (req, res, next) => next();
 
-// OTP specific rate limiter
-const otpLimiter = rateLimit({
-  store: getRedisClient() ? new RedisStore({
-    ...getRedisClient(),
-    prefix: 'rl:otp:'
-  }) : undefined,
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 OTP attempts per windowMs
-  message: {
-    error: 'Too many OTP attempts, please try again later.',
-    retryAfter: '15 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    console.log(`🚫 OTP rate limit exceeded for IP: ${req.ip}`);
-    res.status(429).json({
-      error: 'Too many OTP attempts',
-      message: 'Too many OTP attempts, please try again later.',
-      retryAfter: '15 minutes'
-    });
-  }
-});
+// OTP specific rate limiter - DISABLED
+const otpLimiter = (req, res, next) => next();
 
-// Email-specific rate limiter (prevents email bombing)
-const emailLimiter = rateLimit({
-  store: getRedisClient() ? new RedisStore({
-    ...getRedisClient(),
-    keyGenerator: (req) => `email:${req.body?.email || req.query?.email || req.ip}`,
-    prefix: 'rl:email:'
-  }) : undefined,
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // Limit each email to 3 requests per hour
-  message: {
-    error: 'Too many requests for this email, please try again later.',
-    retryAfter: '1 hour'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: (req, res) => {
-    console.log(`🚫 Email rate limit exceeded for: ${req.body?.email || req.query?.email}`);
-    res.status(429).json({
-      error: 'Too many requests for this email',
-      message: 'Too many requests for this email, please try again later.',
-      retryAfter: '1 hour'
-    });
-  }
-});
+// Email-specific rate limiter (prevents email bombing) - DISABLED
+const emailLimiter = (req, res, next) => next();
 
-// Concurrent request limiter
-const concurrentLimiter = (maxConcurrent = 10) => {
-  let currentRequests = 0;
-  
-  return (req, res, next) => {
-    if (currentRequests >= maxConcurrent) {
-      return res.status(503).json({
-        error: 'Service temporarily unavailable',
-        message: 'Server is busy, please try again in a moment.'
-      });
-    }
-    
-    currentRequests++;
-    
-    const originalEnd = res.end;
-    res.end = function(...args) {
-      currentRequests--;
-      originalEnd.apply(this, args);
-    };
-    
-    next();
-  };
-};
+// Concurrent request limiter - DISABLED
+const concurrentLimiter = (maxConcurrent = 10) => (req, res, next) => next();
 
 module.exports = {
   generalLimiter,

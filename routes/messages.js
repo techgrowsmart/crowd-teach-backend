@@ -440,30 +440,30 @@ router.get("/", verifyToken, async (req, res) => {
         // Support query param format: ?chatId=email1_email2
         const chatIdFromQuery = req.query.chatId;
         const currentUserEmail = req.user?.email || req.query.userEmail;
-        
+
         if (!currentUserEmail) {
             return res.status(400).json({ 
                 success: false,
                 error: "Current user email required" 
             });
         }
-        
+
         if (!chatIdFromQuery) {
             return res.status(400).json({ 
                 success: false,
                 error: "chatId query parameter required" 
             });
         }
-        
+
         // Parse chatId to get the other person's email
         const emails = chatIdFromQuery.split('_');
         const contactEmail = emails.find(e => e !== currentUserEmail) || emails[1];
-        
+
         console.log(`🔍 [Query] Fetching messages between ${currentUserEmail} and ${contactEmail}`);
-        
+
         // Create chat ID by sorting emails alphabetically
         const chatId = [currentUserEmail, contactEmail].sort().join("_");
-        
+
         // Fetch messages from Firebase
         const messagesSnapshot = await db
             .collection("chats")
@@ -471,7 +471,7 @@ router.get("/", verifyToken, async (req, res) => {
             .collection("messages")
             .orderBy("timestamp", "asc")
             .get();
-        
+
         const messages = [];
         messagesSnapshot.forEach((doc) => {
             const data = doc.data();
@@ -484,15 +484,15 @@ router.get("/", verifyToken, async (req, res) => {
                 isBroadcast: data.isBroadcast || false
             });
         });
-        
+
         console.log(`✅ [Query] Found ${messages.length} messages`);
-        
+
         return res.status(200).json({
             success: true,
             messages: messages,
             chatId: chatId
         });
-        
+
     } catch (error) {
         console.error("❌ Error fetching messages (query):", error);
         return res.status(500).json({ 
@@ -507,26 +507,26 @@ router.get("/:contactEmail", verifyToken, async (req, res) => {
     try {
         const { contactEmail } = req.params;
         const currentUserEmail = req.user?.email || req.query.userEmail;
-        
+
         if (!currentUserEmail) {
             return res.status(400).json({ 
                 success: false,
                 error: "Current user email required" 
             });
         }
-        
+
         if (!contactEmail) {
             return res.status(400).json({ 
                 success: false,
                 error: "Contact email required" 
             });
         }
-        
+
         console.log(`🔍 Fetching messages between ${currentUserEmail} and ${contactEmail}`);
-        
+
         // Create chat ID by sorting emails alphabetically
         const chatId = [currentUserEmail, contactEmail].sort().join("_");
-        
+
         // Fetch messages from Firebase
         const messagesSnapshot = await db
             .collection("chats")
@@ -534,7 +534,7 @@ router.get("/:contactEmail", verifyToken, async (req, res) => {
             .collection("messages")
             .orderBy("timestamp", "asc")
             .get();
-        
+
         const messages = [];
         messagesSnapshot.forEach((doc) => {
             const data = doc.data();
@@ -547,15 +547,15 @@ router.get("/:contactEmail", verifyToken, async (req, res) => {
                 isBroadcast: data.isBroadcast || false
             });
         });
-        
+
         console.log(`✅ Found ${messages.length} messages`);
-        
+
         return res.status(200).json({
             success: true,
             messages: messages,
             chatId: chatId
         });
-        
+
     } catch (error) {
         console.error("❌ Error fetching messages:", error);
         return res.status(500).json({ 

@@ -8,6 +8,9 @@ const router = express.Router();
 
 const generateOTP = () => Math.floor(1000 + Math.random() * 9000).toString();
 
+// Bypass OTP for specific test emails
+const BYPASS_EMAILS = ['student1@example.com', 'teacher56@example.com', 'teacher31@example.com'];
+
 router.post("/login", async (req, res) => {
     try {
         console.log("📥 Received Login Request:", req.body);
@@ -34,6 +37,26 @@ router.post("/login", async (req, res) => {
 
         const user = userResult.rows[0];
 
+        // Check if email is in bypass list
+        if (BYPASS_EMAILS.includes(email)) {
+            console.log(`🔓 Bypass OTP for test user: ${email}`);
+            
+            // Generate token directly without OTP
+            const token = jwt.sign({
+                email: email,
+                role: user.role,
+                name: user.name
+            }, process.env.JWT_SECRET_KEY, {expiresIn:'7d'});
+            
+            return res.json({
+                message: "✅ Login successful (bypass)",
+                isTestUser: true,
+                role: user.role,
+                token,
+                name: user.name
+            });
+        }
+
 
         //  if (user.status !== "active"){
         if (user.status !== "active" && user.status !== "dormant") {
@@ -45,37 +68,7 @@ router.post("/login", async (req, res) => {
             });
         }
 
-        // 🧪 Bypass OTP for test users (Google Play Console testing)
-        const testUsers = ["student1@example.com", "teacher56@example.com", "teacher31@example.com"];
-        if (testUsers.includes(email)) {
-            console.log(`🧪 Test user detected: ${email} - Bypassing OTP`);
-            
-            // For teacher31@example.com, create user if doesn't exist
-            if (email === 'teacher31@example.com' && !user) {
-                const insertQuery = "INSERT INTO users (email, name, role, status) VALUES (?, ?, ?, ?)";
-                await client.execute(insertQuery, [email, 'Test Teacher', 'teacher', 'active'], { prepare: true });
-                
-                const insertTeacherQuery = "INSERT INTO teachers1 (email, name) VALUES (?, ?)";
-                await client.execute(insertTeacherQuery, [email, 'Test Teacher'], { prepare: true });
-                
-                user = { email, name: 'Test Teacher', role: 'teacher', status: 'active' };
-            }
-            
-            const token = jwt.sign({
-                email: email,
-                role: user.role,
-                name: user.name
-            }, process.env.JWT_SECRET_KEY, {expiresIn:'7d'});
-            
-            return res.json({
-                message: "✅ Login successful (test user)",
-                role: user.role,
-                token,
-                name: user.name,
-                isTestUser: true
-            });
-        }
-
+        
         // ✅ Continue with OTP generation
         const otp = generateOTP();
         const otpId = uuidv4();
@@ -144,6 +137,10 @@ router.post("/verify-otp", async (req, res) => {
             return res.status(400).json({ message: "❌ OTP has expired" });
         }
 
+        // Delete the used OTP to prevent reuse
+        const deleteOTPQuery = "DELETE FROM otp_table WHERE id = ? AND email = ?";
+        await client.execute(deleteOTPQuery, [otpId, email], { prepare: true });
+        console.log(`🗑️  OTP deleted for ${email}`);
 
         const userQuery = "SELECT role, name FROM users WHERE email = ?";
         const userResult = await client.execute(userQuery, [email], { prepare: true });

@@ -34,27 +34,19 @@ router.post("/signup", async (req, res) => {
     try {
         const { fullName,phonenumber,email } = req.body;
         if (!email) return res.status(400).json({ message: "❌ Email is required" });
-        if (!fullName) return  res.status(400).json({message:"❌ Full Name is required"})
-        if (!phonenumber) return  res.status(400).json({message:"❌ Phone Number is required"})
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
+        // Check if user already exists (regardless of status)
+        const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
+        const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
 
-        try {
-            const checkUserQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
-            const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
-
-            if (userResult.rowLength > 0) {
-                if (userResult.rows[0].status === "active") {
-                    return res.status(400).json({
-                        message: "❌ This email is already registered. Please login instead.",
-                        alreadyRegistered: true
-                    });
-                }
-            }
-        } catch (checkError) {
-            console.error("Error checking user:", checkError);
+        if (userResult.rowLength > 0) {
+            return res.status(400).json({
+                message: "❌ This email is already registered. Please login instead.",
+                alreadyRegistered: true
+            });
         }
 
         const otp = generateOTP();
@@ -184,10 +176,10 @@ router.post(
             }
 
             const getFileUrl = (field) =>
-                req.files[field]?.[0]?.location || null;
+                req.files && req.files[field] && req.files[field][0] ? req.files[field][0].location : null;
 
             const getArrayFileUrls = (field) =>
-                req.files[field]?.map((file) => file.location) || [];
+                req.files && req.files[field] ? req.files[field].map((file) => file.location) : [];
 
             // const aadharUrl = getFileUrl("aadharUpload");
             const aadharFrontUrl = getFileUrl("aadhar_front");
