@@ -206,6 +206,36 @@ router.post('/refresh-token', async (req, res) => {
   }
 });
 
+// Check if user exists endpoint
+router.post('/check-user', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+    
+    const userQuery = "SELECT email, role, name, status FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(userQuery, [email], { prepare: true });
+    
+    if (userResult.rowLength === 0) {
+      return res.json({ exists: false });
+    }
+    
+    const user = userResult.rows[0];
+    res.json({ 
+      exists: true,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      status: user.status
+    });
+  } catch (error) {
+    console.error("❌ Error checking user:", error);
+    res.status(500).json({ message: "Failed to check user" });
+  }
+});
+
 // Update user role after signup
 router.post('/update-role', async (req, res) => {
   try {
