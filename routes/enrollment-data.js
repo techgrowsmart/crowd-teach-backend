@@ -87,7 +87,7 @@ router.get('/enrollment-data', verifyToken, async (req, res) => {
 });
 
 // Get enrollment data for a teacher
-router.get('/enrollment-data/teacher', verifyToken, async (req, res) => {
+router.get('/enrollment-data/teacher', cors(corsOptions), verifyToken, async (req, res) => {
   try {
     const userEmail = req.user.email;
     

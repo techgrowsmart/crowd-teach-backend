@@ -31,7 +31,7 @@ router.options('*', cors(corsOptions));
 router.get('/notifications', verifyToken, notificationController.getNotifications);
 
 // Get count of unread notifications
-router.get('/notifications/unread-count', verifyToken, notificationController.getUnreadCount);
+router.get('/notifications/unread-count', cors(corsOptions), verifyToken, notificationController.getUnreadCount);
 
 // Add new notification (with role targeting)
 router.post('/notifications', verifyToken, notificationController.addNotification);
