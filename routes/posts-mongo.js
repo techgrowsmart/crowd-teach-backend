@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const cors = require('cors');
 const verifyToken = require('../utils/verifyToken');
 const multer = require('multer');
+
+// Enable CORS for all posts routes
+router.use(cors());
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
