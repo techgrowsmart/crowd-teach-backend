@@ -22,27 +22,24 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
 });
 
-// Apply global middleware
-app.use(rateLimiter.generalLimiter);
-app.use(timeout.requestTimeout(30000)); // 30 second timeout
-
 // CORS configuration - Production ready for portal.gogrowsmart.com
+// MUST be applied before other middleware to ensure proper CORS handling
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    
+
     // Allow localhost for development (any port)
     if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
       return callback(null, true);
     }
-    
+
     // Allow all gogrowsmart.com subdomains (production)
-    if (origin.includes('gogrowsmart.com') || 
+    if (origin.includes('gogrowsmart.com') ||
         origin.endsWith('.gogrowsmart.com')) {
       return callback(null, true);
     }
-    
+
     callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -54,6 +51,10 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Apply global middleware AFTER CORS
+app.use(rateLimiter.generalLimiter);
+app.use(timeout.requestTimeout(30000)); // 30 second timeout
 
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
