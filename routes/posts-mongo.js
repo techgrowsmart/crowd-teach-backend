@@ -232,6 +232,12 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
 // Get all posts (for both teachers and students)
 router.get('/all', cors(corsOptions), verifyToken, async (req, res) => {
   try {
+    // Add CORS headers directly as fallback
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.header('Access-Control-Allow-Credentials', 'true');
+
     const userEmail = req.user.email;
     const posts = await Post.find({})
       .sort({ created_at: -1 })
