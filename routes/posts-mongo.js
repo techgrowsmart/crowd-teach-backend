@@ -230,7 +230,7 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
 });
 
 // Get all posts (for both teachers and students)
-router.get('/all', verifyToken, async (req, res) => {
+router.get('/all', cors(corsOptions), verifyToken, async (req, res) => {
   try {
     const userEmail = req.user.email;
     const posts = await Post.find({})
