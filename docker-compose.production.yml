@@ -22,6 +22,7 @@ services:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
       - ./secure-connect-gogrowsmart.zip:/app/secure-connect-gogrowsmart.zip:ro
+      - ./config:/app/config:ro
     depends_on:
       redis:
         condition: service_healthy
