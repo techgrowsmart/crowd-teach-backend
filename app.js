@@ -1446,6 +1446,9 @@ app.get("/api/ping", (req, res) => {
 app.get("/", (req, res) => {
   res.json({ message: "✅ Server is reachable from your device!" });
 });
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy", uptime: process.uptime() });
+});
 
 
 const HOST = process.env.HOST || '0.0.0.0';

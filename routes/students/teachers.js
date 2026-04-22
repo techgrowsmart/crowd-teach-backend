@@ -164,7 +164,7 @@ async function ensureRedis() {
         const processTeacher = (teacher) => {
             const protocol = req.headers.host?.includes('localhost') ? 'http' : 'https';
             teacher.profilePic =
-                teacher.profilepic || `${protocol}://${req.headers.host}/uploads/default-profile.png`;
+                teacher.profilepic || `https://ui-avatars.com/api/?name=${encodeURIComponent(teacher.name || 'User')}&background=random&size=200`;
             return teacher;
         };
 
