@@ -13,12 +13,12 @@ const connectMongoDB = require('./config/mongoDB');
 const app = express();
 
 // Import optimizations
-const rateLimiter = require('./middleware/rateLimiter');
+// const rateLimiter = require('./middleware/rateLimiter'); // Disabled rate limiting
 const timeout = require('./middleware/timeout');
 const { initializeOptimizedDB } = require('./config/db-optimized');
 
 // Apply global middleware
-app.use(rateLimiter.generalLimiter);
+// app.use(rateLimiter.generalLimiter); // Disabled rate limiting
 app.use(timeout.requestTimeout(30000)); // 30 second timeout
 
 // CORS configuration - Production ready for portal.gogrowsmart.com
