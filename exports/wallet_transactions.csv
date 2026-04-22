@@ -1,8 +1,0 @@
-email,transaction_id,amount,created_at,order_id,payment_id,type
-mahesh.pasaladi@gmail.com,9e1f12a0-6dda-11f0-b049-2fbe78c69873,600,Thu Jul 31 2025 12:20:17 GMT+0530 (India Standard Time),order_Qza7Kw2owHNDTs,pay_Qza7e3LsU2YvdG,credit
-mahesh.pasaladi@gmail.com,9bd984e0-6dd9-11f0-a1bc-a40b11fbbca7,600,Thu Jul 31 2025 12:13:03 GMT+0530 (India Standard Time),order_QzZzkDbb7ghsVA,pay_Qza003oooYl0Ek,credit
-mahesh.pasaladi@gmail.com,2a6b47d0-6dd9-11f0-832c-fa1fdc1614ef,600,Thu Jul 31 2025 12:09:53 GMT+0530 (India Standard Time),order_QzZwHEvcdHAGmV,pay_QzZwdEa6XBF3qo,credit
-mahesh.pasaladi@gmail.com,c566fd70-6dd8-11f0-b22b-f5c03617b43d,600,Thu Jul 31 2025 12:07:04 GMT+0530 (India Standard Time),order_QzZtMy03m7UVk4,pay_QzZtfq0wlCTjwf,credit
-mahesh.pasaladi@gmail.com,86d5d6d0-6dd8-11f0-b67c-b81d8cfda0e0,600,Thu Jul 31 2025 12:05:19 GMT+0530 (India Standard Time),order_QzZrWBuPP50OSo,pay_QzZrpssWhw4EOH,credit
-mahesh.pasaladi@gmail.com,4abf0f30-6d4d-11f0-b72d-7155ac628109,200,Wed Jul 30 2025 19:28:38 GMT+0530 (India Standard Time),order_QzIsKSJJkhhQbQ,pay_QzIsz2dFEnQy6Y,credit
-mahesh.pasaladi@gmail.com,9d4761b0-67c3-11f0-9495-23d76c834bb3,200,Wed Jul 23 2025 18:20:30 GMT+0530 (India Standard Time),order_QwVyFAjKuoCkl0,pay_QwVzBLXbZ0G2dH,credit

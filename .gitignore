@@ -154,3 +154,66 @@ serviceAccountKey.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Test and utility scripts
+*-test*.js
+activate-test-users.js
+create-test-user.js
+create-real-tokens.js
+debug-auth.js
+fix-test-users.js
+fix-production-test-users.js
+generate-correct-tokens.js
+use-test-table.js
+verify-deployment.js
+requestLoggerTestGen.js
+mongo-init.js
+passenger.js
+
+# Deployment scripts
+*.sh
+deploy-*.sh
+*-deploy*.sh
+*-fix*.sh
+setup-*.sh
+
+# Documentation and reports
+*.md
+*.txt
+COMPREHENSIVE_LOAD_BALANCING_REPORT.txt
+DEPLOY-*.txt
+DEPLOY-*.md
+LOAD_BALANCING*.txt
+Load_Balancing_Test_Report.md
+
+# Build artifacts
+*.tar.gz
+*.zip
+api-gogrowsmart-deploy.zip
+backend-railway-ready.tar.gz
+ec2-deployment-package.tar.gz
+hostinger-deploy.tar.gz
+vps-deploy.tar.gz
+secure-connect-gogrowsmart.zip
+
+# Backup files
+*.backup
+app.js.backup
+
+# HTML diagrams
+*.html
+HLD_Diagrams.html
+interactive-architecture.html
+
+# Android signing backup
+android-signing-backup/
+
+# Export files
+exports/*.csv
+exports/*.txt
+
+# Bin directory
+bin/
+
+# Scripts directory (test scripts)
+scripts/

@@ -1,4 +1,0 @@
-id,created_at,email,name,phonenumber,profileimage,role,status
-1d2ebfc5-cb65-4132-9c0f-6b44b7c305db,Wed Jul 23 2025 17:16:05 GMT+0530 (India Standard Time),mahesh.pasaladi@gmail.com,Pasaladi Mahesh,07989167660,https://tempfiles-caches.s3.ap-south-1.amazonaws.com/profile-images/1753274033587-profile_1753274033549.jpg,student,active
-b6c8b3ec-9863-41fe-908b-1c72639c9e05,Wed Jul 23 2025 17:22:35 GMT+0530 (India Standard Time),maheshpasaladi.uiux@gmail.com,Naveen,1234567890,https://tempfiles-caches.s3.ap-south-1.amazonaws.com/profile-images/1753271976879-profile_1753271976841.jpg,teacher,active
-8de758bf-494a-4047-ac10-4c0e23a0820a,Fri Aug 01 2025 11:46:26 GMT+0530 (India Standard Time),maheshpasaladu.uiux@gmail.com,Pasaladi Mahesh,9390789519,,teacher,active
