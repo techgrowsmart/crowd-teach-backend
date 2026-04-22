@@ -12,7 +12,7 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
-      - USE_LOCAL_DB=false
+      - USE_LOCAL_DB=true
       - LOCAL_REDIS_URL=redis://redis:6379
       - REDIS_URL=redis://redis:6379
     env_file:
@@ -53,25 +53,9 @@ services:
     sysctls:
       - net.core.somaxconn=511
 
-  # Optional: MongoDB local container if needed
-  # mongodb:
-  #   image: mongo:7
-  #   container_name: growsmart-mongodb
-  #   ports:
-  #     - "127.0.0.1:27017:27017"
-  #   environment:
-  #     - MONGO_INITDB_ROOT_USERNAME=admin
-  #     - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ADMIN_PASSWORD}
-  #     - MONGO_INITDB_DATABASE=gogrowsmart
-  #   volumes:
-  #     - mongodb_data:/data/db
-  #   restart: unless-stopped
-  #   networks:
-  #     - app-network
 
 volumes:
   redis_data:
-  mongodb_data:
 
 networks:
   app-network:
