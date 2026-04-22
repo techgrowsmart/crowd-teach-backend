@@ -161,6 +161,7 @@ router.post("/verify-otp", async (req, res) => {
         res.json({
             message: "✅ OTP verified successfully",
             role: user.role,
+            name: user.name,
             token
         });
     } catch (error) {
@@ -206,6 +207,42 @@ router.post('/refresh-token', async (req, res) => {
   } catch (error) {
     console.error("❌ Error refreshing token:", error);
     res.status(500).json({ message: "Failed to refresh token" });
+  }
+});
+
+// Check if user exists endpoint
+router.post('/check-user', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+    
+    // Check if user exists in database
+    const userQuery = "SELECT role, name, status FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(userQuery, [email], { prepare: true });
+    
+    if (userResult.rowLength === 0) {
+      return res.json({
+        exists: false,
+        message: 'User not found'
+      });
+    }
+    
+    const user = userResult.rows[0];
+    
+    res.json({
+      exists: true,
+      role: user.role,
+      name: user.name,
+      status: user.status,
+      message: 'User found'
+    });
+    
+  } catch (error) {
+    console.error("Error checking user:", error);
+    res.status(500).json({ message: "Failed to check user" });
   }
 });
 
