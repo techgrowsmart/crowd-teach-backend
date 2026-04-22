@@ -105,7 +105,7 @@ if (!fs.existsSync(uploadDir)) {
 
 app.use(bodyParser.json({ limit: "50mb" }));
 app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
-app.use(require('./requestLoggerTestGen.js'));
+// app.use(require('./requestLoggerTestGen.js')); // Test file - not in production
 
 app.use("/uploads", express.static(uploadDir));
 
