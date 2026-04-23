@@ -11,6 +11,7 @@ services:
       - .env
     volumes:
       - ./certs:/app/certs:ro
+      - ./uploads:/app/uploads
     depends_on:
       - redis
       - mongodb
