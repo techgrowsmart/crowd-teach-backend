@@ -245,6 +245,13 @@ router.post(
 
             await client.execute(query, values, { prepare: true });
 
+            // Update users table to set role to 'teacher' and status to 'dormant'
+            // This ensures the user is properly marked as a teacher and will be routed correctly
+            const updateUserQuery = "UPDATE users SET role = ?, status = ? WHERE email = ?";
+            await client.execute(updateUserQuery, ['teacher', 'dormant', email], { prepare: true });
+
+            console.log("✅ Updated user role to 'teacher' and status to 'dormant' for:", email);
+
             res.status(200).json({ message: "Your Documents Submitted." });
         } catch (error) {
             console.error("❌ Error Registration error:", error.message);

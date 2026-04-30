@@ -34,6 +34,37 @@ const upload = multer({
   },
 });
 
+// Helper: Save base64 image to disk
+const saveBase64Image = (base64String) => {
+  try {
+    if (!base64String || !base64String.startsWith('data:image')) {
+      return null;
+    }
+
+    // Extract mime type and base64 data
+    const matches = base64String.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+    if (!matches) {
+      return null;
+    }
+
+    const extension = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+    const base64Data = matches[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    // Generate unique filename
+    const filename = `${Date.now()}-${uuidv4().slice(0, 8)}.${extension}`;
+    const filepath = path.join(uploadDir, filename);
+
+    // Write file
+    fs.writeFileSync(filepath, buffer);
+
+    return `/uploads/${filename}`;
+  } catch (error) {
+    console.error('❌ Error saving base64 image:', error);
+    return null;
+  }
+};
+
 // Create posts table if not exists
 async function initPostsTable() {
   try {
@@ -216,7 +247,17 @@ async function getUserProfile(email) {
 }
 
 // Create a new post (teachers only)
-router.post('/create', verifyToken, upload.single('postImage'), async (req, res) => {
+router.post('/create', verifyToken, (req, res, next) => {
+  // Check if content-type is multipart (file upload) or JSON (base64)
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.includes('multipart/form-data')) {
+    // Use multer for multipart uploads
+    upload.single('postImage')(req, res, next);
+  } else {
+    // Skip multer for JSON requests (body already parsed)
+    next();
+  }
+}, async (req, res) => {
   try {
     const { content, tags, email } = req.body;
     const userEmail = email || req.user.email; // Use email from body if provided (for frontend compatibility)
@@ -247,7 +288,15 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
     }
 
     const postId = uuidv4();
-    const postImage = req.file ? `/uploads/${req.file.filename}` : null;
+    // Handle both multipart file upload and base64 image from JSON body
+    let postImage = null;
+    if (req.file) {
+      // Multipart upload
+      postImage = `/uploads/${req.file.filename}`;
+    } else if (req.body.postImage) {
+      // Base64 image from JSON body
+      postImage = saveBase64Image(req.body.postImage);
+    }
     const tagsArray = tags ? tags.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
 
     const query = `

@@ -120,14 +120,27 @@ function saveBase64Image(base64String, filename) {
 }
 
 // Create a new post (any authenticated user)
-router.post('/create', verifyToken, upload.single('postImage'), async (req, res) => {
+router.post('/create', verifyToken, (req, res, next) => {
+  // Check if content-type is multipart (file upload) or JSON (base64)
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.includes('multipart/form-data')) {
+    upload.single('postImage')(req, res, next);
+  } else {
+    next();
+  }
+}, async (req, res) => {
   try {
-    const { content, tags, imageUri } = req.body;
+    const { content, tags, postImage: imageUri } = req.body;
     const userEmail = req.user.email;
     const userRole = req.user.role || 'Unknown';
 
     console.log('🔍 Creating post - User Role:', userRole, 'Email:', userEmail);
     console.log('📸 Image data:', { hasFile: !!req.file, hasImageUri: !!imageUri });
+    console.log('📦 Request body keys:', Object.keys(req.body));
+    console.log('🖼️ req.body.postImage exists:', !!req.body.postImage);
+    if (req.body.postImage) {
+      console.log('🖼️ postImage starts with:', req.body.postImage.substring(0, 30));
+    }
 
     if (!content || content.trim() === '') {
       return res.status(400).json({
@@ -153,13 +166,17 @@ router.post('/create', verifyToken, upload.single('postImage'), async (req, res)
     if (req.file) {
       // File upload from mobile
       postImage = `/uploads/${req.file.filename}`;
-    } else if (imageUri && imageUri.startsWith('data:image')) {
-      // Base64 image from web
+    } else if (req.body.postImage && req.body.postImage.startsWith('data:image')) {
+      // Base64 image from web - frontend sends as 'postImage'
+      console.log('✅ Detected base64 image, saving...');
       const filename = `${Date.now()}.jpg`;
-      postImage = saveBase64Image(imageUri, filename);
+      postImage = saveBase64Image(req.body.postImage, filename);
+      console.log('✅ Saved image to:', postImage);
+    } else {
+      console.log('❌ No image detected - req.file:', !!req.file, 'postImage check:', !!(req.body.postImage && req.body.postImage.startsWith('data:image')));
     }
-    
-    console.log('🖼️ Post image path:', postImage);
+
+    console.log('🖼️ Final post image path:', postImage);
 
     const newPost = new Post({
       id: postId,

@@ -21,23 +21,30 @@ const { initializeOptimizedDB } = require('./config/db-optimized');
 // app.use(rateLimiter.generalLimiter); // Disabled rate limiting
 app.use(timeout.requestTimeout(30000)); // 30 second timeout
 
-// CORS configuration - Production ready for portal.gogrowsmart.com
+// CORS configuration - Supports both local development and production
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
     // Allow localhost for development (any port)
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+    // Common Expo/React dev server ports: 8081, 19000-19006, 3000, 3001
+    const allowedLocalhostPorts = [8081, 19000, 19001, 19002, 19003, 19004, 19005, 19006, 3000, 3001, 5000, 5001];
+    const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+    
+    if (isLocalhost) {
+      console.log(`✅ CORS: Allowing localhost origin: ${origin}`);
       return callback(null, true);
     }
     
     // Allow all gogrowsmart.com subdomains (production)
     if (origin.includes('gogrowsmart.com') || 
         origin.endsWith('.gogrowsmart.com')) {
+      console.log(`✅ CORS: Allowing production origin: ${origin}`);
       return callback(null, true);
     }
     
+    console.warn(`❌ CORS: Rejected origin: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -201,6 +208,7 @@ const walletBalence = require("./routes/getWalletBalence")
 const getProfie = require("./routes/getProfile")
 const connectionRequest =require("./routes/connectionRequest")
 const addonClass = require("./routes/teachers/addonClass")
+const updateTuitions = require("./routes/teachers/updateTuitions")
 const myTutors = require("./routes/students/myTutors")
 const {preloadTeachersToQueue}= require("./utils/preLoadTeachersQueue")
 const redisClient= require("./config/redis")
@@ -241,6 +249,7 @@ app.use("/api/review",review)
 
 app.use("/api",connectionRequest)
 app.use("/api",addonClass)
+app.use("/api",updateTuitions)
 
 app.use("/api", notificationRoutes);
 // for teacherInfoRoutes
@@ -979,7 +988,7 @@ const getUniversityYearId = (universityName, yearName, jsonData) => {
   return null;
 };
 
-app.post("/api/teacherss",  upload.single("profileimage"), async (req, res) => {
+app.post("/api/teacherss", async (req, res) => {
   const {
     fullName,
     email,
@@ -992,43 +1001,55 @@ app.post("/api/teacherss",  upload.single("profileimage"), async (req, res) => {
     workExperience,
     university,
   } = req.body;
-console.log("Cate",req.body)
+
+  console.log("📥 /api/teacherss received:", { fullName, email, category, qualificationsCount: qualifications?.length, tuitionsCount: tuitions?.length });
+
+  // Validation - only name, email and category are mandatory
   if (!fullName || !email || !category) {
     return res.status(400).json({ error: "Full name, email, and category are required" });
   }
 
-  if (!Array.isArray(qualifications) || qualifications.length === 0) {
-    return res.status(400).json({ error: "At least one qualification is required" });
+  // Ensure arrays are properly parsed (handle both string JSON and actual arrays)
+  let parsedQualifications = qualifications;
+  let parsedTuitions = tuitions;
+  let parsedTeachingMode = teachingMode;
+
+  if (typeof qualifications === 'string') {
+    try { parsedQualifications = JSON.parse(qualifications); } catch (e) { parsedQualifications = []; }
+  }
+  if (typeof tuitions === 'string') {
+    try { parsedTuitions = JSON.parse(tuitions); } catch (e) { parsedTuitions = []; }
+  }
+  if (typeof teachingMode === 'string') {
+    try { parsedTeachingMode = JSON.parse(teachingMode); } catch (e) { parsedTeachingMode = ['Online']; }
   }
 
-  if (!Array.isArray(teachingMode) || teachingMode.length === 0) {
-    return res.status(400).json({ error: "At least one teaching mode must be selected" });
-  }
-
-  if (!Array.isArray(tuitions) || tuitions.length === 0) {
-    return res.status(400).json({ error: "At least one tuition subject must be added" });
-  }
+  // Ensure defaults for optional arrays
+  parsedQualifications = Array.isArray(parsedQualifications) ? parsedQualifications : [];
+  parsedTuitions = Array.isArray(parsedTuitions) ? parsedTuitions : [];
+  parsedTeachingMode = Array.isArray(parsedTeachingMode) && parsedTeachingMode.length > 0 ? parsedTeachingMode : ['Online'];
 
   try {
-    const tuitionsWithIds = tuitions.map(tuition => {
+    // Process tuitions - add classId/skillId for each
+    const tuitionsWithIds = parsedTuitions.map(tuition => {
       if (category === "Subject teacher") {
         // For Universities board, use university+year ID instead of classId
         if (tuition.board === 'Universities') {
           const uniYearId = getUniversityYearId(tuition.university, tuition.year, classBoardData);
           return {
             ...tuition,
-            classId: uniYearId, // Use university_year ID as the grouping key
+            classId: uniYearId || `uni_${tuition.university?.toLowerCase().replace(/\s+/g, '_')}_${tuition.year}`,
           };
         } else {
           return {
             ...tuition,
-            classId: getClassId(tuition.board, tuition.class, classBoardData),
+            classId: getClassId(tuition.board, tuition.class, classBoardData) || `${tuition.board}_${tuition.class}`,
           };
         }
       } else {
         return {
           ...tuition,
-          skillId: getSkillID(tuition.skill, classBoardData),
+          skillId: getSkillID(tuition.skill, classBoardData) || tuition.skill?.toLowerCase().replace(/\s+/g, '_'),
         };
       }
     });
@@ -1054,16 +1075,20 @@ console.log("Cate",req.body)
       fullName,
       profilePic || "",
       introduction || "",
-      JSON.stringify(qualifications),
+      JSON.stringify(parsedQualifications),
       false,
       category,
       JSON.stringify(tuitionsWithIds),
-      JSON.stringify(teachingMode),
+      JSON.stringify(parsedTeachingMode),
       workExperience || "",
       university || ""
     ];
 
+    console.log("📤 /api/teacherss: Saving tuitions to DB:", JSON.stringify(tuitionsWithIds));
+    console.log("📤 /api/teacherss: teacherParams[7] (tuitions):", teacherParams[7]);
+
     await client.execute(insertTeacherQuery, teacherParams, { prepare: true });
+    console.log("✅ /api/teacherss: Saved to teachers1 table");
 
 
     const tuitionsByClass = {};
@@ -1105,10 +1130,23 @@ console.log("Cate",req.body)
       await client.execute(insertInfoQuery, infoParams, { prepare: true });
     }
 
-    res.status(200).json({ message: "Teacher data saved successfully" });
+    res.status(200).json({
+      success: true,
+      message: "Teacher data saved successfully",
+      data: {
+        email,
+        name: fullName,
+        tuitionsCount: tuitionsWithIds.length,
+        qualificationsCount: parsedQualifications.length
+      }
+    });
   } catch (error) {
     console.error("❌ Error saving teacher data:", error);
-    res.status(500).json({ error: "Failed to save teacher data" });
+    res.status(500).json({
+      success: false,
+      error: "Failed to save teacher data",
+      message: error.message
+    });
   }
 });
 

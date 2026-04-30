@@ -96,8 +96,13 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
                 category, tuitions, teachingmode, workexperience, university
             FROM teachers1
             WHERE email = ?
+            ALLOW FILTERING
         `;
         const teacherResult = await cassandraClient.execute(teacherQuery, [email], { prepare: true });
+        console.log("📊 getProfile: teachers1 query result rows:", teacherResult.rowLength);
+        if (teacherResult.rowLength > 0) {
+            console.log("📊 getProfile: Raw tuitions from DB:", teacherResult.rows[0].tuitions);
+        }
 
         // ✅ ADD THIS: Get highest_degree from tutors table
         const tutorQuery = "SELECT heighest_degree FROM tutors WHERE email = ? ALLOW FILTERING";
@@ -122,7 +127,32 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
         };
 
         if (teacherResult.rowLength > 0) {
-            const teacher = teacherResult.rows[0];
+            // Find the row with the most complete tuitions data
+            let bestTeacher = teacherResult.rows[0];
+            let bestTuitionCount = 0;
+            
+            for (const row of teacherResult.rows) {
+                let tuitionCount = 0;
+                if (row.tuitions) {
+                    try {
+                        const t = typeof row.tuitions === 'string' ? JSON.parse(row.tuitions) : row.tuitions;
+                        if (Array.isArray(t)) {
+                            tuitionCount = t.filter(item => item.class || item.subject || item.skill).length;
+                        }
+                    } catch (e) {
+                        // ignore parse errors
+                    }
+                }
+                console.log(`📊 getProfile: Row for "${row.name}" has ${tuitionCount} valid tuitions`);
+                if (tuitionCount > bestTuitionCount) {
+                    bestTuitionCount = tuitionCount;
+                    bestTeacher = row;
+                }
+            }
+            
+            const teacher = bestTeacher;
+            console.log(`📊 getProfile: Selected best row: "${teacher.name}" with ${bestTuitionCount} tuitions`);
+            console.log("📊 getProfile: Raw teacher row:", JSON.stringify(teacher, null, 2));
 
             // Parse JSON fields safely
             let qualifications = [];
@@ -131,21 +161,36 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
                     qualifications = typeof teacher.qualifications === 'string'
                         ? JSON.parse(teacher.qualifications)
                         : teacher.qualifications;
+                    // Ensure qualifications is always an array
+                    if (!Array.isArray(qualifications)) {
+                        console.warn("Qualifications is not an array, defaulting to empty array");
+                        qualifications = [];
+                    }
                 } catch (err) {
                     console.error("Failed to parse qualifications:", err);
+                    qualifications = [];
                 }
             }
 
             let tuitions = [];
+            console.log("📊 getProfile: teacher.tuitions value:", teacher.tuitions);
+            console.log("📊 getProfile: typeof teacher.tuitions:", typeof teacher.tuitions);
             if (teacher.tuitions) {
                 try {
                     tuitions = typeof teacher.tuitions === 'string'
                         ? JSON.parse(teacher.tuitions)
                         : teacher.tuitions;
+                    // Ensure tuitions is always an array
+                    if (!Array.isArray(tuitions)) {
+                        console.warn("Tuitions is not an array, defaulting to empty array");
+                        tuitions = [];
+                    }
                 } catch (err) {
                     console.error("Failed to parse tuitions:", err);
+                    tuitions = [];
                 }
             }
+            console.log("📊 getProfile: Parsed tuitions array:", JSON.stringify(tuitions));
 
             let teachingMode = ["Online"];
             if (teacher.teachingmode) {
@@ -153,8 +198,13 @@ router.post("/teacherProfile", verifyToken, async (req, res) => {
                     teachingMode = typeof teacher.teachingmode === 'string'
                         ? JSON.parse(teacher.teachingmode)
                         : teacher.teachingmode;
+                    // Ensure teachingMode is always an array
+                    if (!Array.isArray(teachingMode) || teachingMode.length === 0) {
+                        teachingMode = ["Online"];
+                    }
                 } catch (err) {
                     console.error("Failed to parse teaching mode:", err);
+                    teachingMode = ["Online"];
                 }
             }
 

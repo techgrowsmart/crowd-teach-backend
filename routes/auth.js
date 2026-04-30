@@ -246,6 +246,74 @@ router.post('/check-user', async (req, res) => {
   }
 });
 
+// Google OAuth login endpoint
+router.post('/google-login', async (req, res) => {
+  try {
+    const { email, googleToken, name } = req.body;
+    
+    if (!email || !googleToken) {
+      return res.status(400).json({ message: 'Email and Google token are required' });
+    }
+    
+    // Verify Google token with Google's API
+    const googleResponse = await fetch(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${googleToken}`);
+    const googleData = await googleResponse.json();
+    
+    if (googleData.error) {
+      console.error('Google token verification failed:', googleData);
+      return res.status(401).json({ message: 'Invalid Google token' });
+    }
+    
+    // Verify the email matches
+    if (googleData.email !== email) {
+      return res.status(401).json({ message: 'Email mismatch' });
+    }
+    
+    // Check if user exists in database
+    const userQuery = "SELECT * FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(userQuery, [email], { prepare: true });
+    
+    let user;
+    if (userResult.rowLength === 0) {
+      // User doesn't exist - this shouldn't happen since frontend checks first
+      return res.status(404).json({ message: 'User not found. Please sign up first.' });
+    } else {
+      user = userResult.rows[0];
+    }
+    
+    // Check if user is active
+    if (user.status !== 'active' && user.status !== 'dormant') {
+      return res.status(403).json({
+        message: 'Your account is not active. Please contact support.',
+        status: user.status,
+        role: user.role
+      });
+    }
+    
+    // Generate JWT token
+    const token = jwt.sign({
+      email: user.email,
+      role: user.role,
+      name: user.name || name
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    
+    res.json({
+      success: true,
+      message: 'Google login successful',
+      token: token,
+      user: {
+        email: user.email,
+        role: user.role,
+        name: user.name || name
+      }
+    });
+    
+  } catch (error) {
+    console.error('Google login error:', error);
+    res.status(500).json({ message: 'Failed to login with Google' });
+  }
+});
+
 // Update user role after signup
 router.post('/update-role', async (req, res) => {
   try {

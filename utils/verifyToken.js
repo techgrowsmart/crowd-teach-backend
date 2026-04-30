@@ -1,6 +1,11 @@
 const jwt = require('jsonwebtoken');
 
 const verifyToken = (req, res, next) => {
+    // Allow OPTIONS requests to pass through for CORS preflight
+    if (req.method === 'OPTIONS') {
+        return next();
+    }
+
     // Debug logging
     console.log('🔍 Auth Debug - Headers:', Object.keys(req.headers));
     console.log('🔍 Auth Debug - Authorization Header:', req.headers.authorization);
