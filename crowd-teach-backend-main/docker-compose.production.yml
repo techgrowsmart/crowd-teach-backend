@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: growsmart-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - USE_LOCAL_DB=true
+      - LOCAL_REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env.production
+    volumes:
+      - ./certs:/app/certs:ro
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./secure-connect-gogrowsmart.zip:/app/secure-connect-gogrowsmart.zip:ro
+      - ./config:/app/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: growsmart-redis
+    ports:
+      - "127.0.0.1:6379:6379"  # Local only for security
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - app-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    sysctls:
+      - net.core.somaxconn=511
+
+volumes:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

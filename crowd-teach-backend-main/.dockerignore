@@ -1,0 +1,61 @@
+node_modules
+npm-debug.log
+npm-debug.log*
+request_logger_simulation_test.spec.js
+.idea
+exports
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production.local
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Logs
+logs
+*.log
+backend.log
+server.log
+
+# Tests
+tests
+tests/
+*.test.js
+*.spec.js
+
+# Development files
+.github
+.vscode
+.DS_Store
+*.md
+!README.md
+
+# Deployment scripts (not needed in container)
+*.sh
+deploy-*
+!scripts/
+
+# SSL certificates (mount as volume)
+certs/*.pem
+certs/*.key
+
+# Uploads (mount as volume)
+uploads/*
+
+# Build artifacts
+*.tar.gz
+*.zip
+dist/
+build/
+
+# Documentation
+DEPLOYMENT*.md
+PRODUCTION*.md
+CORS-*.md
+*.md
+!README.md

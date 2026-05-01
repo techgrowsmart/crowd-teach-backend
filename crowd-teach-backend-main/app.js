@@ -1,0 +1,1524 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const http = require("http");
+const https = require("https");
+const cassandra = require("cassandra-driver");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const verifyToken = require("./utils/verifyToken")
+const connectMongoDB = require('./config/mongoDB');
+const app = express();
+
+// Import optimizations
+// const rateLimiter = require('./middleware/rateLimiter'); // Disabled rate limiting
+const timeout = require('./middleware/timeout');
+const { initializeOptimizedDB } = require('./config/db-optimized');
+
+// Apply global middleware
+// app.use(rateLimiter.generalLimiter); // Disabled rate limiting
+app.use(timeout.requestTimeout(30000)); // 30 second timeout
+
+// CORS configuration - Supports both local development and production
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Allow localhost for development (any port)
+    // Common Expo/React dev server ports: 8081, 19000-19006, 3000, 3001
+    const allowedLocalhostPorts = [8081, 19000, 19001, 19002, 19003, 19004, 19005, 19006, 3000, 3001, 5000, 5001];
+    const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+    
+    if (isLocalhost) {
+      console.log(`✅ CORS: Allowing localhost origin: ${origin}`);
+      return callback(null, true);
+    }
+    
+    // Allow all gogrowsmart.com subdomains (production)
+    if (origin.includes('gogrowsmart.com') || 
+        origin.endsWith('.gogrowsmart.com')) {
+      console.log(`✅ CORS: Allowing production origin: ${origin}`);
+      return callback(null, true);
+    }
+    
+    console.warn(`❌ CORS: Rejected origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-Test-User'],
+  credentials: true,
+  maxAge: 86400,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+
+// Performance monitoring
+app.use((req, res, next) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`📊 ${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
+  });
+  
+  next();
+});
+
+// Initialize MongoDB connection
+connectMongoDB().catch(err => {
+  console.error('❌ Failed to connect to MongoDB:', err);
+  if (process.env.SKIP_MONGO !== 'true') {
+    process.exit(1);
+  }
+});
+
+// Production-ready SSL configuration
+let httpServer;
+
+// Check if we're in production and have SSL certificates
+if (process.env.NODE_ENV === 'production' && fs.existsSync('./certs/privkey.pem') && fs.existsSync('./certs/fullchain.pem')) {
+  const options = {
+    key: fs.readFileSync('./certs/privkey.pem'),
+    cert: fs.readFileSync('./certs/fullchain.pem')
+  };
+  httpServer = https.createServer(options, app);
+  console.log('🔒 HTTPS server configured with SSL certificates');
+} else {
+  httpServer = http.createServer(app);
+  if (process.env.NODE_ENV === 'production') {
+    console.log('⚠️  Production mode but no SSL certificates found, falling back to HTTP');
+  } else {
+    console.log('🔓 Development mode: HTTP server');
+  }
+}
+
+// Initialize Socket.io
+const { initSocket } = require('./socket');
+const io = initSocket(httpServer);
+console.log('📡 Socket.io initialized for real-time communication');
+
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+app.use(bodyParser.json({ limit: "50mb" }));
+app.use(bodyParser.urlencoded({ limit: "50mb", extended: true }));
+// app.use(require('./requestLoggerTestGen.js')); // Test file - not in production
+
+// Static file serving with CORS headers for cross-origin image loading
+app.use("/uploads", (req, res, next) => {
+  // Add CORS headers for static files
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  next();
+}, express.static(uploadDir, {
+  maxAge: '1d', // Cache for 1 day
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, path) => {
+    // Set proper content-type for images
+    if (path.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+    } else if (path.endsWith('.jpg') || path.endsWith('.jpeg')) {
+      res.setHeader('Content-Type', 'image/jpeg');
+    } else if (path.endsWith('.gif')) {
+      res.setHeader('Content-Type', 'image/gif');
+    }
+  }
+}));
+
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type. Only JPEG, PNG, and GIF are allowed."));
+    }
+  },
+});
+
+
+const verifySubscription = async (req, res, next) => {
+  try {
+    const user_email = req.user?.email;
+    
+    if (!user_email) {
+      return res.status(401).json({ 
+        success: false, 
+        message: "Authentication required" 
+      });
+    }
+
+    const currentDate = new Date();
+    
+    const query = `SELECT * FROM user_subscriptions WHERE user_email = ? AND validity_date >= ? AND subscription_status = ? ALLOW FILTERING`;
+    
+    const result = await client.execute(query, [user_email, currentDate, 'active'], { prepare: true });
+    
+    if (result.rowLength === 0) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Active subscription required",
+        code: "SUBSCRIPTION_REQUIRED"
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error("❌ Error verifying subscription:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Failed to verify subscription" 
+    });
+  }
+};
+
+const subscriptionRoutes = require('./routes/subscription.js');
+
+const updateRoleRouter = require('./routes/update-user-role');
+const signupRoutes = require("./routes/signup");
+const authRoutes = require("./routes/auth");
+const paymentRoutes = require('./routes/payments/paymentRoutes');
+const {response} = require("express");
+const messages = require("./routes/messages")
+const walletBalence = require("./routes/getWalletBalence")
+const getProfie = require("./routes/getProfile")
+const connectionRequest =require("./routes/connectionRequest")
+const addonClass = require("./routes/teachers/addonClass")
+const updateTuitions = require("./routes/teachers/updateTuitions")
+const myTutors = require("./routes/students/myTutors")
+const {preloadTeachersToQueue}= require("./utils/preLoadTeachersQueue")
+const redisClient= require("./config/redis")
+const allboards = require("./routes/teachers/allboards")
+const teachers = require("./routes/students/teachers")
+const teacherInfoRoutes = require("./routes/students/teacherInfo.js"); //for teachers list
+const valuesToselect = require("./routes/boardsValues")
+const review = require('./routes/students/review')
+const favoritesRoutes = require("./routes/favorites");
+const testAuthRoutes = require('./routes/test-auth');
+const {v4: uuidv4} = require("uuid");
+const multerS3 = require("multer-s3");
+const s3 = require("./config/s3");
+const { createObjectCsvWriter } = require('csv-writer');
+const classBoardData = JSON.parse(fs.readFileSync('./utils/allBoards.json', "utf8"));
+
+
+// Add this with other route imports
+const notificationRoutes = require('./routes/notification');
+//routes for createSubject
+const createSubject = require('./routes/teachers/createSubject.js');
+
+app.use("/api", signupRoutes);
+app.use("/api/auth", authRoutes);
+
+app.use('/api', updateRoleRouter);
+app.use("/api",getProfie)
+app.use("/api",valuesToselect)
+app.use("/api",teachers)
+app.use("/api",allboards)
+//for create subject - register before messages to prevent route collision
+app.use("/api", createSubject);
+app.use("/api/messages",messages)
+app.use("/api",myTutors)
+app.use('/api/payments', paymentRoutes);
+app.use("/api",walletBalence)
+app.use("/api/review",review)
+
+app.use("/api",connectionRequest)
+app.use("/api",addonClass)
+app.use("/api",updateTuitions)
+
+app.use("/api", notificationRoutes);
+// for teacherInfoRoutes
+app.use("/api", teacherInfoRoutes);
+app.use("/api/subscriptions", subscriptionRoutes);
+
+app.use("/api/favorites", favoritesRoutes);
+app.use("/api/test-auth", testAuthRoutes);
+
+// Posts/Thoughts routes - Using MongoDB
+const postsRoutes = require('./routes/posts-mongo');
+app.use("/api/posts", postsRoutes);
+
+// User profile routes - Using AstraDB
+const userProfileRoutes = require('./routes/userProfile');
+app.use("/api/userProfile", userProfileRoutes);
+
+// Missing API endpoints for production
+const teacherReviewsRoutes = require("./routes/teacher-reviews");
+app.use("/api", teacherReviewsRoutes);
+
+const contactsRoutes = require("./routes/contacts");
+app.use("/api", contactsRoutes);
+
+const enrollmentDataRoutes = require("./routes/enrollment-data");
+app.use("/api", enrollmentDataRoutes);
+
+// Booking routes for real-time class booking requests
+const { router: bookingRoutes, initBookingTable } = require('./routes/booking');
+app.use("/api/bookings", bookingRoutes);
+
+// Teacher contacts route
+const teacherContactsRoutes = require('./routes/teacher-contacts');
+app.use("/api/teacher", teacherContactsRoutes);
+
+// Teacher enrolled students route
+const teacherEnrolledStudentsRoutes = require('./routes/teacher-enrolled-students');
+app.use("/api/teacher", teacherEnrolledStudentsRoutes);
+
+// const client = new cassandra.Client({
+//
+//   contactPoints: ['127.0.0.1'],
+//   localDataCenter: 'datacenter1',
+//   keyspace: "tutorial_app",
+//
+// });
+
+const cloud = { secureConnectBundle: "./secure-connect-gogrowsmart.zip" };
+const authProvider = new cassandra.auth.PlainTextAuthProvider('token', process.env['ASTRA_TOKEN']);
+const credentials = {
+  username: process.env.ASTRA_DB_USERNAME,
+  password: process.env.ASTRA_DB_PASSWORD
+};
+const client = new cassandra.Client({ keyspace: process.env.ASTRA_DB_KEYSPACE, cloud, authProvider,  credentials});
+
+// Initialize booking table on server startup
+initBookingTable(client).catch(err => {
+  console.error('❌ Failed to initialize booking table:', err);
+});
+
+async function createFavoriteTeachersTable() {
+    try {
+        const query = `
+            CREATE TABLE IF NOT EXISTS favorite_teachers (
+                student_id TEXT,
+                teacher_id TEXT,
+                created_at TIMESTAMP,
+                teacher_data TEXT,  -- Store teacher data as JSON string
+                PRIMARY KEY ((student_id), teacher_id)
+            ) WITH default_time_to_live = 0;
+        `;
+        
+        await client.execute(query);
+        console.log("✅ favorite_teachers table created or already exists");
+    } catch (error) {
+        console.error("❌ Error creating favorite_teachers table:", error);
+    }
+}
+
+// Add this with other table creation functions
+const createNotificationsTable = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id uuid,
+        sender_name text,
+        avatar_url text,
+        message text,
+        created_at timestamp,
+        target_role text,  -- 'student', 'teacher', or 'all'
+        PRIMARY KEY ((target_role), created_at, id)
+      ) WITH CLUSTERING ORDER BY (created_at DESC, id DESC)
+    `);
+    
+    console.log('✅ Notifications table created successfully');
+  } catch (error) {
+    console.error('❌ Error creating notifications table:', error);
+  }
+};
+
+const createNotificationReadStatusTable = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS notification_read_status (
+        user_email text,
+        notification_id uuid,
+        read_at timestamp,
+        PRIMARY KEY (user_email, notification_id)
+      )
+    `);
+    console.log('✅ Notification read status table created successfully');
+  } catch (error) {
+    console.error('❌ Error creating notification read status table:', error);
+  }
+};
+
+// Call these functions after client initialization
+createNotificationsTable();
+createFavoriteTeachersTable();
+createNotificationReadStatusTable();
+
+const createStudentTable=async()=>{
+  try {
+    await client.execute(`
+          CREATE TABLE IF NOT EXISTS student (
+                                       email TEXT PRIMARY KEY,          
+                                       name TEXT,
+                                       date_of_birth TEXT,
+                                       profileimage TEXT,             
+                                       board TEXT,                      
+                                       school_name TEXT,                 
+                                       class_year TEXT,                      
+                                       medium TEXT,                      
+                                       phone_number TEXT,
+                                       address TEXT,
+                                       state TEXT,
+                                       pincode TEXT,
+                                       country TEXT
+)
+    `)
+    console.log("✅ Student table created successfully");
+  }catch (err){
+    console.error("❌ Error creating Student table:", error.message);
+  }
+}
+
+const createOtpTable = async () => {
+  try {
+    const query = `
+      CREATE TABLE IF NOT EXISTS otp_table (
+                               email text,
+                               id uuid,
+                               otp text,
+                               expires_at timestamp,
+                               PRIMARY KEY (email, id)
+      );
+    `;
+    await client.execute(query);
+    console.log("✅ otp table created successfully.");
+  } catch (error) {
+    console.error("❌ Error creating otp table:", error.message);
+  }
+}
+
+const createUsersTable = async () => {
+  try {
+    const query = `
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID,
+        email TEXT,
+        name TEXT,
+        phonenumber TEXT,
+        role TEXT,
+        profileImage TEXT,
+        status TEXT,
+        created_at TIMESTAMP,
+        PRIMARY KEY (id)
+      )
+    `;
+
+    const indexQuery = `
+      CREATE INDEX IF NOT EXISTS ON users(email);
+    `;
+
+    await client.execute(query);
+    await client.execute(indexQuery);
+    console.log("✅ users1 table created successfully.");
+  } catch (error) {
+    console.error("❌ Error creating users table:", error.message);
+  }
+};
+
+const createSubjectsTable = async () => {
+  try {
+      const query = `
+          CREATE TABLE IF NOT EXISTS subjects (
+              subject_id UUID PRIMARY KEY,
+              teacher_email TEXT,
+              teaching_category TEXT,  -- 'Subject Teacher' or 'Skill Teacher'
+              class_name TEXT,         -- For Subject: class name, For Skill: skill name
+              class_category TEXT,     -- For Subject: class category, For Skill: 'Skill'
+              description TEXT,
+              board TEXT,              -- For Subject: board name, For Skill: 'Not Applicable'
+              subject_title TEXT,      -- Subject name or Skill name
+              status TEXT,
+              created_at TIMESTAMP
+          )
+      `;
+      await client.execute(query);
+      console.log("✅ Subjects table created successfully");
+  } catch (error) {
+      console.error("❌ Error creating subjects table:", error.message);
+  }
+};
+
+// Call this function after other table creations
+createSubjectsTable();
+
+createUsersTable()
+const createTeacherTables = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS teacher_info (
+                                                id text,              
+                                                email text,
+                                                name text,
+                                                tutions text,
+                                                profilepic text,
+                                                introduction text,
+                                                PRIMARY KEY (id, email)
+        )
+    `);
+    console.log("✅ teacher_info table created successfully");
+  } catch (error) {
+    console.error("❌ Error creating teacher_info table:", error.message);
+  }
+};
+createStudentTable()
+
+const createTeachersTable1 = async () => {
+  try {
+    const query = `
+      CREATE TABLE IF NOT EXISTS teachers1 (
+        
+        email TEXT,
+        name TEXT,
+        profilePic TEXT,
+        introduction TEXT,
+        qualifications TEXT,
+        category TEXT,
+        tuitions TEXT,
+        teachingMode TEXT,
+        workExperience TEXT,
+        university TEXT,
+        isSpotlight BOOLEAN,
+        PRIMARY KEY (email,name)
+      );
+    `;
+
+    await client.execute(query);
+    console.log("✅ teachers table created successfully.");
+  } catch (error) {
+    console.error("❌ Error creating teachers table:", error.message);
+  }
+};
+createTeachersTable1()
+
+const createMytutorsTable = async ()=>{
+  try {
+    const query=
+        `
+        CREATE TABLE my_tutors (
+                           student_email TEXT,
+                           teacher_email TEXT,
+                           subject TEXT,
+                           class_name TEXT,
+                           booking_date TIMESTAMP,
+                           PRIMARY KEY ((student_email), teacher_email)
+);
+      `
+    console.log("✅ My tutors table created Successfully")
+  }catch (e) {
+    console.error("❌ Error creating My tutors table:", e.message);
+  }
+}
+createMytutorsTable()
+
+const createReviewTable = async () =>{
+  try {
+    const query = `
+      CREATE TABLE IF NOT EXISTS teacher_reviews
+      (
+        teacher_email TEXT,
+        review_id UUID,
+        teacher_name TEXT,
+        student_email TEXT,
+        student_name TEXT,
+        student_profile_pic TEXT,
+        rating INT,
+        selected_tags LIST<TEXT>,
+        review_text TEXT,
+        created_at TIMESTAMP,
+        PRIMARY KEY(teacher_email,review_id)
+        );
+    `
+    await client.execute(query)
+    console.log("✅ Review table created successfully.")
+  }catch (err){
+    console.error("❌ Error creating Review table:",err.message)
+  }
+}
+const tutorsRegistration = async () => {
+  try {
+    const query = `
+      CREATE TABLE IF NOT EXISTS tutors (
+                                          id UUID,
+                                          email TEXT,
+                                          full_name TEXT,
+                                          phone_number TEXT,
+                                          residentialAddress TEXT,
+                                          state TEXT,
+                                          country TEXT,
+                                          pan TEXT,
+                                          aadhar_front TEXT,  // Changed from aadhar
+                                          aadhar_back TEXT,   // New column
+                                          selfie_with_aadhar_front TEXT,
+                                          selfie_with_aadhar_back TEXT,
+                                          heighest_degree TEXT,
+                                          specialization TEXT,
+                                          experience TEXT,
+                                          certification LIST<TEXT>,
+                                          heighest_qualification_certification LIST<TEXT>,
+                                          razorpay_account_id TEXT,
+                                          PRIMARY KEY (id, email)
+        );
+    `;
+    await client.execute(query);
+    console.log("✅ Registration table created successfully.");
+  } catch (err) {
+    console.error("❌ Error creating Registration table:", err.message);
+  }
+};
+
+createBankdetails= async ()=>{
+
+    try {
+      const query =`
+CREATE TABLE IF NOT EXISTS bank_details (
+  user_id UUID,
+  email TEXT,
+  account_number TEXT,
+  ifsc_code TEXT,
+  pan TEXT,
+  bank_name TEXT,
+  pincode TEXT,
+  account_holder_name TEXT,
+  created_at TIMESTAMP,
+  PRIMARY KEY (user_id,email)
+);
+  `
+      await  client.execute(query)
+      console.log("✅ Bank details table Created successfully")
+    }catch (error){
+      console.error("❌ Error creating Bank details table",error.message)
+    }
+}
+
+createBankdetails()
+createReviewTable()
+createTeacherTables();
+tutorsRegistration();
+createOtpTable();
+
+const createWalletTables = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS student_wallets (
+        email text PRIMARY KEY,
+        balance counter
+      )
+    `);
+
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        email text,
+        transaction_id timeuuid,
+        amount int,
+        type text,
+        order_id text,
+        payment_id text,
+        created_at timestamp,
+        PRIMARY KEY (email, transaction_id)
+      ) WITH CLUSTERING ORDER BY (transaction_id DESC)
+    `);
+
+    console.log('✅ Wallet tables created successfully');
+  } catch (error) {
+    console.error('❌ Error creating wallet tables:', error.message);
+  }
+};
+createWalletTables();
+
+const createBroadcastTables = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS broadcast_table (
+                                            teacherEmail text,
+                                            className text,
+                                            subject text,
+                                            studentEmail text,
+                                            teacherName text,
+                                            teacherProfilePic text,
+                                            studentName text,
+                                            studentProfilePic text,
+                                            date_time text,
+                                            PRIMARY KEY (teacherEmail, className, subject, studentEmail)
+        )
+    `)
+
+    console.log('✅ Broadcast tables created successfully');
+  } catch (error) {
+    console.error('❌ Error creating broadcast tables:', error);
+  }
+}
+createBroadcastTables();
+
+const createBroadcastMessagesTables = async () => {
+  try {
+    await client.execute(`
+      CREATE TABLE IF NOT EXISTS broadcast_messages_table (
+                                            teacherEmail text,
+                                            className text,
+                                            subject text,
+                                            id timeuuid,
+                                            studentEmails text,
+                                            studentNames text,
+                                            isBroadcast boolean,
+                                            sender text,
+                                            teacherName text,
+                                            text text,
+                                            time text,
+                                            timestamp timestamp,
+                                            PRIMARY KEY ((teacherEmail, className, subject), id)
+        ) WITH CLUSTERING ORDER BY (id DESC);
+    `)
+
+    console.log('✅ Broadcast messages tables created successfully');
+  } catch (error) {
+    console.error('❌ Error creating broadcast messages tables:', error);
+  }
+}
+createBroadcastMessagesTables();
+
+// Protected booking route - requires subscription
+app.post("/api/book-class", verifyToken, verifySubscription, async (req, res) => {
+  try {
+    const { 
+      teacherEmail, 
+      teacherName, 
+      teacherProfilePic,
+      selectedSubject, 
+      selectedClass, 
+      charge, 
+      description 
+    } = req.body;
+
+    // This route will only execute if user has active subscription
+    // Return success to allow frontend navigation
+    res.status(200).json({
+      success: true,
+      message: "Subscription verified, proceeding to booking"
+    });
+
+  } catch (error) {
+    console.error("❌ Error in book-class:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to process booking" 
+    });
+  }
+});
+
+app.post("/api/add-bank-details", verifyToken, async (req, res) => {
+  try {
+    const { TeacherBankDetails } = require('./models/TeacherDetails');
+    const email = req.user.email;
+
+    const {
+      account_number,
+      ifsc_code,
+      bank_name,
+      account_holder_name,
+      pan,
+      pincode
+    } = req.body;
+
+    if (!account_number || !ifsc_code || !bank_name || !account_holder_name || !pan || !pincode) {
+      return res.status(400).json({ 
+        success: false,
+        message: "All bank details are required" 
+      });
+    }
+
+    // Check if bank details already exist
+    const existingDetails = await TeacherBankDetails.findOne({ teacher_email: email });
+    if (existingDetails) {
+      // Update existing details
+      existingDetails.account_number = account_number;
+      existingDetails.ifsc_code = ifsc_code;
+      existingDetails.bank_name = bank_name;
+      existingDetails.account_holder_name = account_holder_name;
+      existingDetails.pan = pan;
+      existingDetails.pincode = pincode;
+      existingDetails.status = 'pending'; // Reset to pending for review
+      existingDetails.updated_at = new Date();
+      
+      await existingDetails.save();
+      
+      return res.status(200).json({ 
+        success: true,
+        message: "Bank details updated successfully. Your profile is under review." 
+      });
+    }
+
+    // Create new bank details
+    const bankDetails = new TeacherBankDetails({
+      teacher_email: email,
+      account_number,
+      ifsc_code,
+      bank_name,
+      account_holder_name,
+      pan,
+      pincode,
+      status: 'pending'
+    });
+
+    await bankDetails.save();
+
+    return res.status(200).json({ 
+      success: true,
+      message: "Bank details submitted successfully. Your profile is under review." 
+    });
+
+  } catch (error) {
+    console.error("❌ Error saving bank details:", error);
+    return res.status(500).json({ 
+      success: false,
+      message: "Failed to save bank details" 
+    });
+  }
+});
+const uploadImg = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    metadata: (req, file, cb) => {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: (req, file, cb) => {
+      const fileName = `${Date.now()}-${file.originalname}`;
+      cb(null, `profile-images/${fileName}`);
+    }
+  })
+});
+
+app.post(
+    "/api/updateStudentProfile",
+    verifyToken,
+    uploadImg.single("profileimage"),
+    async (req, res) => {
+      try {
+        const {
+          email,
+          name,
+          dateofBirth,
+          board,
+          instituteName,
+          classYear,
+          preferredMedium,
+          phone_number,
+          fullAddress,
+          stateName,
+          pincode,
+          country,
+
+        } = req.body;
+        console.log("📩 Received body:", req.body);
+        console.log("📸 Received file:", req.file);
+
+        if (!email || !name || !dateofBirth) {
+          return res
+              .status(400)
+              .json({ message: "❌ Email, name, and DOB are required" });
+        }
+
+        if (!req.file || !req.file.location) {
+          return res
+              .status(400)
+              .json({ message: "❌ Profile image is required" });
+        }
+
+        const profileImageUrl = req.file.location;
+
+        const findUserQuery = "SELECT id FROM users WHERE email = ? ALLOW FILTERING";
+        const userResult = await client.execute(findUserQuery, [email], { prepare: true });
+
+        if (userResult.rowLength === 0) {
+          return res.status(404).json({ message: `❌ No user found for email: ${email}` });
+        }
+
+        const userId = userResult.rows[0].id;
+        console.log("Received body fields:", req.body);
+        console.log("Received file:", req.file);
+
+        console.log("User")
+        const updateUserQuery = "UPDATE users SET profileimage = ?, name = ? WHERE id = ?";
+        await client.execute(updateUserQuery, [profileImageUrl, name, userId], { prepare: true });
+
+        const getStudentQuery = "SELECT * FROM student WHERE email = ? ALLOW FILTERING";
+        const existingStudent = await client.execute(getStudentQuery, [email], { prepare: true });
+        const existingData = existingStudent.rows[0] || {};
+
+        const studentQuery = `
+                INSERT INTO student (
+                    email, name, date_of_birth, board, school_name,
+                    class_year, medium, phone_number, address, state, pincode, country, profileimage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+
+        const params = [
+          email,
+          name,
+          dateofBirth,
+          board,
+          instituteName,
+          classYear,
+          preferredMedium,
+          phone_number,
+          fullAddress,
+          stateName,
+          pincode,
+          country,
+          profileImageUrl,
+        ];
+
+        await client.execute(studentQuery, params, { prepare: true });
+        console.log("res",res.json)
+        return res.status(200).json({
+          message: "✅ Student profile updated successfully",
+          imageUrl: profileImageUrl,
+        });
+      } catch (error) {
+        console.error("❌ Error updating student profile:", error);
+        return res.status(500).json({
+          message: "❌ Internal Server Error",
+          error: error.message,
+        });
+      }
+    }
+);
+
+app.post("/api/upload",verifyToken, (req, res) => {
+  upload.single("file")(req, res, function (err) {
+    if (err) {
+      console.error("File upload error:", err);
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    console.log("File uploaded successfully:", req.file);
+    const protocol = req.headers.host?.includes('localhost') ? 'http' : 'https';
+    const fileUrl = `${protocol}://${req.headers.host}/uploads/${req.file.filename}`;
+    res.json({ url: fileUrl });
+  });
+});
+const getClassId = (boardName, className, jsonData) => {
+  for (const category of jsonData) {
+    if (category.name === "Subject teacher") {
+      for (const board of category.boards) {
+        if (board.name === boardName) {
+          for (const cls of board.classes) {
+            if (cls.name === className) {
+              return cls.id;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+
+const getSkillID = (skillName, jsonData) => {
+  for (const category of jsonData) {
+    if (category.name === "Skill teacher") {
+      for (const skill of category.skills) {
+        if (skill.name === skillName) {
+          return skill.id;
+        }
+      }
+    }
+  }
+  return null;
+};
+
+// Get university+year ID for Universities board entries
+const getUniversityYearId = (universityName, yearName, jsonData) => {
+  for (const category of jsonData) {
+    if (category.name === "Subject teacher") {
+      for (const board of category.boards) {
+        if (board.name === "Universities") {
+          for (const uni of board.universities || []) {
+            if (uni.name === universityName) {
+              for (const year of uni.years || []) {
+                if (year.name === yearName) {
+                  return `${uni.id}_${year.id}`;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // Fallback: create a safe ID from university and year names
+  if (universityName && yearName) {
+    const safeUni = universityName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    const safeYear = yearName.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    return `uni_${safeUni}_${safeYear}`;
+  }
+  return null;
+};
+
+app.post("/api/teacherss", async (req, res) => {
+  const {
+    fullName,
+    email,
+    profilePic,
+    introduction,
+    qualifications,
+    category,
+    tuitions,
+    teachingMode,
+    workExperience,
+    university,
+  } = req.body;
+
+  console.log("📥 /api/teacherss received:", { fullName, email, category, qualificationsCount: qualifications?.length, tuitionsCount: tuitions?.length });
+
+  // Validation - only name, email and category are mandatory
+  if (!fullName || !email || !category) {
+    return res.status(400).json({ error: "Full name, email, and category are required" });
+  }
+
+  // Ensure arrays are properly parsed (handle both string JSON and actual arrays)
+  let parsedQualifications = qualifications;
+  let parsedTuitions = tuitions;
+  let parsedTeachingMode = teachingMode;
+
+  if (typeof qualifications === 'string') {
+    try { parsedQualifications = JSON.parse(qualifications); } catch (e) { parsedQualifications = []; }
+  }
+  if (typeof tuitions === 'string') {
+    try { parsedTuitions = JSON.parse(tuitions); } catch (e) { parsedTuitions = []; }
+  }
+  if (typeof teachingMode === 'string') {
+    try { parsedTeachingMode = JSON.parse(teachingMode); } catch (e) { parsedTeachingMode = ['Online']; }
+  }
+
+  // Ensure defaults for optional arrays
+  parsedQualifications = Array.isArray(parsedQualifications) ? parsedQualifications : [];
+  parsedTuitions = Array.isArray(parsedTuitions) ? parsedTuitions : [];
+  parsedTeachingMode = Array.isArray(parsedTeachingMode) && parsedTeachingMode.length > 0 ? parsedTeachingMode : ['Online'];
+
+  try {
+    // Process tuitions - add classId/skillId for each
+    const tuitionsWithIds = parsedTuitions.map(tuition => {
+      if (category === "Subject teacher") {
+        // For Universities board, use university+year ID instead of classId
+        if (tuition.board === 'Universities') {
+          const uniYearId = getUniversityYearId(tuition.university, tuition.year, classBoardData);
+          return {
+            ...tuition,
+            classId: uniYearId || `uni_${tuition.university?.toLowerCase().replace(/\s+/g, '_')}_${tuition.year}`,
+          };
+        } else {
+          return {
+            ...tuition,
+            classId: getClassId(tuition.board, tuition.class, classBoardData) || `${tuition.board}_${tuition.class}`,
+          };
+        }
+      } else {
+        return {
+          ...tuition,
+          skillId: getSkillID(tuition.skill, classBoardData) || tuition.skill?.toLowerCase().replace(/\s+/g, '_'),
+        };
+      }
+    });
+
+    const insertTeacherQuery = `
+      INSERT INTO teachers1 (
+        email,
+        name,
+        profilePic,
+        introduction,
+        qualifications,
+        isspotlight,
+        category,
+        tuitions,
+        teachingMode,
+        workExperience,
+        university
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const teacherParams = [
+      email,
+      fullName,
+      profilePic || "",
+      introduction || "",
+      JSON.stringify(parsedQualifications),
+      false,
+      category,
+      JSON.stringify(tuitionsWithIds),
+      JSON.stringify(parsedTeachingMode),
+      workExperience || "",
+      university || ""
+    ];
+
+    console.log("📤 /api/teacherss: Saving tuitions to DB:", JSON.stringify(tuitionsWithIds));
+    console.log("📤 /api/teacherss: teacherParams[7] (tuitions):", teacherParams[7]);
+
+    await client.execute(insertTeacherQuery, teacherParams, { prepare: true });
+    console.log("✅ /api/teacherss: Saved to teachers1 table");
+
+
+    const tuitionsByClass = {};
+
+    for (const tuition of tuitionsWithIds) {
+      const key = category === "Subject teacher" ? tuition.classId : tuition.skillId;
+      console.log("key",key)
+      const id = key || "unknown";
+
+      if (!tuitionsByClass[id]) {
+        tuitionsByClass[id] = [];
+      }
+
+      tuitionsByClass[id].push(tuition);
+    }
+    console.log("Data",tuitionsByClass)
+
+    for (const id in tuitionsByClass) {
+      const insertInfoQuery = `
+        INSERT INTO teacher_info (
+          id,
+          email,
+          name,
+          tutions,
+          profilePic,
+          introduction
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `;
+
+      const infoParams = [
+        id,
+        email,
+        fullName,
+        JSON.stringify(tuitionsByClass[id]),
+        profilePic || "",
+        introduction || "",
+      ];
+
+      await client.execute(insertInfoQuery, infoParams, { prepare: true });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Teacher data saved successfully",
+      data: {
+        email,
+        name: fullName,
+        tuitionsCount: tuitionsWithIds.length,
+        qualificationsCount: parsedQualifications.length
+      }
+    });
+  } catch (error) {
+    console.error("❌ Error saving teacher data:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to save teacher data",
+      message: error.message
+    });
+  }
+});
+
+
+
+const uploadTeacher = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    metadata: (req, file, cb) => {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: (req, file, cb) => {
+      const fileName = `${Date.now()}-${file.originalname}`;
+      cb(null, `profile-images/${fileName}`);
+    }
+  })
+});
+app.post("/api/uploadTeacherimg", uploadTeacher.single("profileimage"), async (req, res) => {
+  try {
+    console.log("hitting upload teacher img")
+    // console.log("🚀 req.body:", req.body);
+    // console.log("📷 req.file:", req.file);
+    if (!req.file) {
+      return res.status(400).json({ message: "No image uploaded" });
+    }
+
+    const { email, name } = req.body;
+    const profileImageUrl = req.file.location;
+
+    console.log(`🔄 Updating profile for ${email}`);
+
+
+    const findUserQuery = "SELECT id FROM users WHERE email = ? ALLOW FILTERING";
+    const result = await client.execute(findUserQuery, [email], { prepare: true });
+
+    if (result.rowLength === 0) {
+      return res.status(404).json({ message: `❌ No user found with email: ${email}` });
+    }
+
+    const userId = result.rows[0].id;
+    console.log("User ID",userId)
+
+    const updateQuery = "UPDATE users SET profileimage = ?, name = ? WHERE id = ?";
+    const updateParams = [profileImageUrl, name, userId];
+
+    await client.execute(updateQuery, updateParams, { prepare: true });
+
+    const teacherProfile = "UPDATE teachers1 SET profilepic = ? WHERE email = ? AND name = ?";
+
+    const updateParamsTeachers = [profileImageUrl,email,name];
+
+    await  client.execute(teacherProfile,updateParamsTeachers,{prepare:true})
+
+    return res.status(200).json({
+      message: "✅ Profile image uploaded successfully",
+      imageUrl: req.file.location,
+      email,
+      name,
+    });
+  } catch (err) {
+    console.error("❌ Upload error:", err);
+    res.status(500).json({ message: "Server error while uploading image" });
+  }
+});
+
+
+app.get("/api/student-wallet-balence",verifyToken, async (req, res) => {
+
+
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const query = 'SELECT email, balance FROM student_wallets WHERE email = ?';
+    const params = [email];
+
+    const result = await client.execute(query, params, { prepare: true });
+
+    if (result.rowLength === 0) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    const student = result.rows[0];
+
+    return res.json({
+      email: student.email,
+      walletBalance: student.balance
+    });
+
+
+  } catch (e) {
+    console.error("Error fetching student wallet balance:", e);
+    return res.status(500).json({ message: "Failed to fetch wallet balance" });
+  }
+});
+
+app.post("/api/profile",verifyToken, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "❌ Email is required" });
+    }
+
+    console.log(`🔍 Fetching profile for: ${email}`);
+
+    const query = "SELECT * FROM users WHERE email = ? ALLOW FILTERING";
+    const result = await client.execute(query, [email], { prepare: true });
+
+    if (result.rowLength === 0) {
+      return res.status(404).json({ message: "❌ User not found" });
+    }
+    const userProfile = result.rows[0];
+    console.log("✅ User profile found:", userProfile);
+    return res.status(200).json({ profile: userProfile });
+  } catch (error) {
+    console.error("❌ Error fetching profile:", error);
+    return res.status(500).json({ message: `Failed to fetch profile: ${error.message}` });
+  }
+});
+
+
+app.post('/api/review', async (req, res) => {
+    const {
+        teacherEmail,
+        teacherName,
+        studentEmail,
+        studentName,
+        studentProfilePic,
+        rating,
+        selectedTags,
+        reviewText
+    } = req.body;
+
+    if (!teacherEmail || !studentEmail || !rating || !reviewText) {
+        return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const reviewId = uuidv4();
+    const createdAt = new Date();
+
+    const query = `
+        INSERT INTO teacher_reviews (
+            teacher_email, review_id, teacher_name,
+            student_email, student_name, student_profile_pic,
+            rating, selected_tags, review_text, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `;
+
+    const params = [
+        teacherEmail, reviewId, teacherName,
+        studentEmail, studentName, studentProfilePic || '',
+        rating, selectedTags, reviewText, createdAt
+    ];
+
+    try {
+        await client.execute(query, params, { prepare: true });
+        res.status(200).json({ message: 'Review submitted' });
+    } catch (error) {
+        console.error('Failed to insert review:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+
+app.get('/review', async (req, res) => {
+  console.log('📥 Received GET /review request with query:', req.query);
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({ message: 'Email query param is required' });
+  }
+
+  const query = `SELECT * FROM teacher_reviews WHERE teacher_email = ? ALLOW FILTERING`;
+
+  try {
+    const result = await client.execute(query, [email], { prepare: true });
+    res.status(200).json({ reviews: result.rows });
+  } catch (error) {
+    console.error('❌ Failed to fetch reviews:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post("/api/messages/send", async (req, res) => {
+  const { sender, recipient, text } = req.body;
+  const chatId = [sender, recipient].sort().join("_");
+console.log("chtId",chatId)
+  await client.execute(
+      "INSERT INTO messages (chat_id, sender, recipient, text, timestamp) VALUES (?, ?, ?, ?, toTimestamp(now()))",
+      [chatId, sender, recipient, text]
+  );
+
+  res.json({ message: "Message sent" });
+});
+
+// Get bank details
+app.get("/api/bank-details", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+
+    const getUserQuery = "SELECT id FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(getUserQuery, [email], { prepare: true });
+
+    if (userResult.rowLength === 0) {
+      return res.status(404).json({ message: "❌ User not found" });
+    }
+
+    const userId = userResult.rows[0].id;
+
+    const query = `
+      SELECT account_number, ifsc_code, bank_name, account_holder_name, pan, pincode 
+      FROM bank_details 
+      WHERE user_id = ? AND email = ?
+    `;
+
+    const result = await client.execute(query, [userId, email], { prepare: true });
+
+    if (result.rowLength === 0) {
+      return res.status(404).json({ message: "❌ Bank details not found" });
+    }
+
+    const bankDetails = result.rows[0];
+    
+    return res.status(200).json({
+      success: true,
+      data: {
+        accountNumber: bankDetails.account_number,
+        ifscCode: bankDetails.ifsc_code,
+        bankName: bankDetails.bank_name,
+        accountHolderName: bankDetails.account_holder_name,
+        pan: bankDetails.pan,
+        pincode: bankDetails.pincode
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error fetching bank details:", error.message);
+    return res.status(500).json({ 
+      success: false, 
+      message: "❌ Failed to fetch bank details" 
+    });
+  }
+});
+
+// Update bank details
+app.put("/api/update-bank-details", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email;
+
+    const getUserQuery = "SELECT id FROM users WHERE email = ? ALLOW FILTERING";
+    const userResult = await client.execute(getUserQuery, [email], { prepare: true });
+
+    if (userResult.rowLength === 0) {
+      return res.status(404).json({ message: "❌ User not found" });
+    }
+
+    const userId = userResult.rows[0].id;
+
+    const {
+      account_number,
+      ifsc_code,
+      bank_name,
+      account_holder_name,
+      pan,
+      pincode
+    } = req.body;
+
+    if (!account_number || !ifsc_code || !bank_name || !account_holder_name || !pan) {
+      return res.status(400).json({ message: "❌ All bank details are required" });
+    }
+
+    // Check if bank details already exist
+    const checkQuery = "SELECT * FROM bank_details WHERE user_id = ? AND email = ?";
+    const existingDetails = await client.execute(checkQuery, [userId, email], { prepare: true });
+
+    let query;
+    let params;
+
+    if (existingDetails.rowLength > 0) {
+      // Update existing record
+      query = `
+        UPDATE bank_details 
+        SET account_number = ?, ifsc_code = ?, bank_name = ?, account_holder_name = ?, pan = ?, pincode = ?, created_at = ?
+        WHERE user_id = ? AND email = ?
+      `;
+      params = [
+        account_number,
+        ifsc_code,
+        bank_name,
+        account_holder_name,
+        pan,
+        pincode,
+        new Date(),
+        userId,
+        email
+      ];
+    } else {
+      // Insert new record
+      query = `
+        INSERT INTO bank_details (user_id, email, account_number, ifsc_code, bank_name, account_holder_name, pan, pincode, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      params = [
+        userId,
+        email,
+        account_number,
+        ifsc_code,
+        bank_name,
+        account_holder_name,
+        pan,
+        pincode,
+        new Date()
+      ];
+    }
+
+    await client.execute(query, params, { prepare: true });
+
+    return res.status(200).json({ 
+      success: true,
+      message: "✅ Bank details updated successfully" 
+    });
+
+  } catch (error) {
+    console.error("❌ Error updating bank details:", error.message);
+    return res.status(500).json({ 
+      success: false, 
+      message: "❌ Failed to update bank details" 
+    });
+  }
+});
+
+
+// Initial preload on server start
+preloadTeachersToQueue().then(r => {});
+
+// Endpoint to manually trigger teacher data preload
+app.get("/api/preload-teachers", async (req, res) => {
+    try {
+        console.log("🔄 Manual teacher preload requested");
+        await preloadTeachersToQueue();
+        res.json({ success: true, message: "✅ Teacher data preloaded successfully" });
+    } catch (error) {
+        console.error("❌ Error in manual preload:", error);
+        res.status(500).json({ success: false, message: "Failed to preload teacher data", error: error.message });
+    }
+});
+
+app.get("/api/ping", (req, res) => {
+  res.json({ message: "✅ Server is reachable from your device!" });
+});
+app.get("/", (req, res) => {
+  res.json({ message: "✅ Server is reachable from your device!" });
+});
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy", uptime: process.uptime() });
+});
+
+
+const HOST = process.env.HOST || '0.0.0.0';
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 443 : 3000);
+const PROTOCOL = process.env.NODE_ENV === 'production' && httpServer instanceof https.Server ? 'https' : 'http';
+
+httpServer.listen(PORT, HOST, () => {
+  console.log(`🚀 Server running on ${PROTOCOL}://${HOST}:${PORT}`);
+  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 API Base URL: ${PROTOCOL}://${HOST}:${PORT}`);
+});
+
+
+module.exports = app;
