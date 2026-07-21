@@ -1,0 +1,32 @@
+# Hostinger Node.js .htaccess
+# Place this in public_html directory
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Redirect all traffic to Node.js app
+    RewriteRule ^$ http://127.0.0.1:3000/ [P,L]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ http://127.0.0.1:3000/$1 [P,L]
+</IfModule>
+
+# Enable mod_proxy for Node.js
+<IfModule mod_proxy.c>
+    ProxyPass / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+    ProxyPreserveHost On
+</IfModule>
+
+# Handle CORS
+<IfModule mod_headers.c>
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    Header set Access-Control-Allow-Headers "Content-Type, Authorization"
+</IfModule>
+
+# Disable directory browsing
+Options -Indexes
+
+# Set default charset
+AddDefaultCharset UTF-8
