@@ -528,6 +528,68 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
             const lastBroadcast = sortedBroadcasts[0];
             
             const normalizedClassName = normalizeClassName(row.class_name);
+
+            // Share the participant summary for this group with subscribed students.
+            // Only the group-level name, email, profile picture, and status are exposed.
+            const participantRows = new Map();
+            const participantClassNames = [row.class_name, normalizedClassName, '', 'All Classes']
+                .filter((className, index, candidates) => className !== null && className !== undefined && candidates.indexOf(className) === index);
+
+            for (const participantClassName of participantClassNames) {
+                const participantResult = await client.execute(`
+                    SELECT student_email, student_name, student_info, created_at, status
+                    FROM booking_requests
+                    WHERE teacher_email = ? AND subject = ? AND class_name = ?
+                    ALLOW FILTERING
+                `, [row.teacher_email, row.subject, participantClassName], { prepare: true });
+
+                for (const participant of participantResult.rows || []) {
+                    if (!participant.student_email || !['subscribed', 'accepted'].includes(participant.status)) continue;
+                    if (!participantRows.has(participant.student_email)) {
+                        let participantInfo = {};
+                        try {
+                            participantInfo = participant.student_info
+                                ? (typeof participant.student_info === 'string' ? JSON.parse(participant.student_info) : participant.student_info)
+                                : {};
+                        } catch (error) {
+                            participantInfo = {};
+                        }
+
+                        let profilePic = participantInfo.profilePic || participantInfo.profileImage || participantInfo.profileimage || participantInfo.profilepic || null;
+                        try {
+                            const userResult = await client.execute(
+                                'SELECT profileimage FROM users WHERE email = ? LIMIT 1',
+                                [participant.student_email],
+                                { prepare: true }
+                            );
+                            profilePic = userResult.rows?.[0]?.profileimage || profilePic;
+
+                            if (!profilePic) {
+                                const studentResult = await client.execute(
+                                    'SELECT profileimage FROM student WHERE email = ? LIMIT 1',
+                                    [participant.student_email],
+                                    { prepare: true }
+                                );
+                                profilePic = studentResult.rows?.[0]?.profileimage || profilePic;
+                            }
+                        } catch (error) {
+                            console.warn(`Could not fetch current profile picture for ${participant.student_email}:`, error.message);
+                        }
+
+                        participantRows.set(participant.student_email, {
+                            email: participant.student_email,
+                            name: participant.student_name || participant.student_email,
+                            profilePic,
+                            joinedAt: participant.created_at,
+                            status: participant.status
+                        });
+                    }
+                }
+            }
+
+            const participantList = Array.from(participantRows.values());
+            const students = participantList.filter((participant) => participant.status === 'subscribed');
+            const pendingStudents = participantList.filter((participant) => participant.status === 'accepted');
             subscriptions.push({
                 groupId: `group_${row.teacher_email}_${row.subject}_${normalizedClassName}`,
                 teacherEmail: row.teacher_email,
@@ -536,6 +598,9 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
                 subject: row.subject,
                 className: normalizedClassName,
                 boardOrUniversity: studentInfo?.board || studentInfo?.university || '',
+                students,
+                pendingStudents,
+                studentCount: students.length,
                 lastBroadcast: lastBroadcast ? {
                     id: lastBroadcast.id?.toString(),
                     text: lastBroadcast.text,

@@ -264,6 +264,49 @@ router.get('/all', verifyToken, async (req, res) => {
   }
 });
 
+// Get my posts only
+router.get('/my', verifyToken, async (req, res) => {
+  try {
+    const userEmail = req.user.email;
+    const posts = await Post.find({ author_email: userEmail })
+      .sort({ created_at: -1 })
+      .lean();
+
+    const userLikes = await PostLike.find({ user_email: userEmail })
+      .select('post_id')
+      .lean();
+    const likedPostIds = new Set(userLikes.map(like => like.post_id));
+
+    const formattedPosts = posts.map(post => ({
+      id: post.id,
+      author: {
+        email: post.author_email,
+        name: post.author_name,
+        role: post.author_role,
+        profile_pic: post.author_profile_pic
+      },
+      content: post.content,
+      postImage: getImageUrl(post.post_image),
+      likes: post.likes || 0,
+      createdAt: post.created_at,
+      tags: post.tags || [],
+      isLiked: likedPostIds.has(post.id)
+    }));
+
+    res.json({
+      success: true,
+      data: formattedPosts
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching my posts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch my posts'
+    });
+  }
+});
+
 // GET /posts - Public endpoint for thoughtsCard (no authentication required)
 router.get('/', async (req, res) => {
   try {

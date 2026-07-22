@@ -205,7 +205,6 @@ const allboards = require("./routes/teachers/allboards")
 const teachers = require("./routes/students/teachers")
 const teacherInfoRoutes = require("./routes/students/teacherInfo.js"); //for teachers list
 const valuesToselect = require("./routes/boardsValues")
-const review = require('./routes/students/review')
 const favoritesRoutes = require("./routes/favorites");
 const testAuthRoutes = require('./routes/test-auth');
 const {v4: uuidv4} = require("uuid");
@@ -239,7 +238,6 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/broadcast", broadcastRoutes)
 app.use("/api",myTutors)
 app.use('/api/payments', paymentRoutes);
-app.use("/api/review",review)
 
 app.use("/api",connectionRequest)
 app.use("/api",addonClass)
@@ -658,30 +656,6 @@ const createMytutorsTable = async ()=>{
 }
 setTimeout(() => createMytutorsTable().catch(err => console.error('❌ My tutors table creation failed:', err.message)), 18000);
 
-const createReviewTable = async () =>{
-  try {
-    const query = `
-      CREATE TABLE IF NOT EXISTS teacher_reviews
-      (
-        teacher_email TEXT,
-        review_id UUID,
-        teacher_name TEXT,
-        student_email TEXT,
-        student_name TEXT,
-        student_profile_pic TEXT,
-        rating INT,
-        selected_tags LIST<TEXT>,
-        review_text TEXT,
-        created_at TIMESTAMP,
-        PRIMARY KEY(teacher_email,review_id)
-        );
-    `
-    await client.execute(query)
-    console.log("✅ Review table created successfully.")
-  }catch (err){
-    console.error("❌ Error creating Review table:",err.message)
-  }
-}
 const tutorsRegistration = async () => {
   try {
     const query = `
@@ -729,7 +703,6 @@ const addMissingColumnsToTutors = async () => {
   }
 };
 
-setTimeout(() => createReviewTable().catch(err => console.error('❌ Review table creation failed:', err.message)), 11000);
 setTimeout(() => createTeacherTables().catch(err => console.error('❌ Teacher tables creation failed:', err.message)), 6000);
 setTimeout(() => tutorsRegistration().catch(err => console.error('❌ Tutors registration failed:', err.message)), 7000);
 setTimeout(() => createOtpTable().catch(err => console.error('❌ OTP table creation failed:', err.message)), 9000);
@@ -1329,68 +1302,6 @@ app.post("/api/profile",verifyToken, async (req, res) => {
   }
 });
 
-
-app.post('/api/review', async (req, res) => {
-    const {
-        teacherEmail,
-        teacherName,
-        studentEmail,
-        studentName,
-        studentProfilePic,
-        rating,
-        selectedTags,
-        reviewText
-    } = req.body;
-
-    if (!teacherEmail || !studentEmail || !rating || !reviewText) {
-        return res.status(400).json({ message: 'Missing required fields' });
-    }
-
-    const reviewId = uuidv4();
-    const createdAt = new Date();
-
-    const query = `
-        INSERT INTO teacher_reviews (
-            teacher_email, review_id, teacher_name,
-            student_email, student_name, student_profile_pic,
-            rating, selected_tags, review_text, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-    `;
-
-    const params = [
-        teacherEmail, reviewId, teacherName,
-        studentEmail, studentName, studentProfilePic || '',
-        rating, selectedTags, reviewText, createdAt
-    ];
-
-    try {
-        await client.execute(query, params, { prepare: true });
-        res.status(200).json({ message: 'Review submitted' });
-    } catch (error) {
-        console.error('Failed to insert review:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
-
-app.get('/review', async (req, res) => {
-  console.log('📥 Received GET /review request with query:', req.query);
-  const { email } = req.query;
-
-  if (!email) {
-    return res.status(400).json({ message: 'Email query param is required' });
-  }
-
-  const query = `SELECT * FROM teacher_reviews WHERE teacher_email = ? ALLOW FILTERING`;
-
-  try {
-    const result = await client.execute(query, [email], { prepare: true });
-    res.status(200).json({ reviews: result.rows });
-  } catch (error) {
-    console.error('❌ Failed to fetch reviews:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
 
 app.post("/api/messages/send", async (req, res) => {
   const { sender, recipient, text } = req.body;
