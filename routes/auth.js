@@ -52,6 +52,32 @@ router.post("/login", async (req, res) => {
             });
         }
 
+        // ✅ Test user hardcoded OTP bypass
+        const TEST_USERS = ['student1@example.com', 'teacher1@example.com'];
+        const TEST_OTP = '1234';
+
+        if (TEST_USERS.includes(email)) {
+            console.log(`🧪 Test user detected: ${email}. Using hardcoded OTP: ${TEST_OTP}`);
+            const otp = TEST_OTP;
+            const otpId = uuidv4();
+            const expirationTime = new Date(Date.now() + 2 * 60 * 1000);
+
+            const insertOTPQuery =
+                "INSERT INTO otp_table (id, email, otp, expires_at) VALUES (?, ?, ?, ?)";
+            const params = [otpId, email, otp, expirationTime];
+            await client.execute(insertOTPQuery, params, { prepare: true });
+
+            console.log(`🧪 Test OTP stored for ${email}: ${otp} (skipping email send)`);
+
+            res.json({
+                message: "✅ Test OTP sent successfully (use 1234)",
+                otpId,
+                isRegistered: true,
+                role: user.role,
+            });
+            return;
+        }
+
         // ✅ Continue with OTP generation
         const otp = generateOTP();
         const otpId = uuidv4();
@@ -100,6 +126,39 @@ router.post("/verify-otp", async (req, res) => {
             return res.status(400).json({ message: "❌ Email, OTP, and OTP ID are required" });
         }
 
+        // ✅ Test user hardcoded OTP bypass
+        const TEST_USERS = ['student1@example.com', 'teacher1@example.com'];
+        const TEST_OTP = '1234';
+
+        if (TEST_USERS.includes(email) && otp === TEST_OTP) {
+            console.log(`🧪 Test OTP bypass for ${email}`);
+
+            // Clean up any existing OTPs for this email
+            const deleteQuery = "DELETE FROM otp_table WHERE email = ?";
+            await client.execute(deleteQuery, [email], { prepare: true });
+
+            const userQuery = "SELECT id, role, name FROM users WHERE email = ?";
+            const userResult = await client.execute(userQuery, [email], { prepare: true });
+
+            if (userResult.rowLength === 0) {
+                return res.status(404).json({ message: "❌ User not found" });
+            }
+
+            const user = userResult.rows[0];
+            const token = jwt.sign({
+                userId: user.id,
+                email: email,
+                role: user.role,
+                name: user.name
+            }, process.env.JWT_SECRET_KEY, {expiresIn:'30d'})
+            res.json({
+                message: "✅ OTP verified successfully (test mode)",
+                role: user.role,
+                name: user.name,
+                token
+            });
+            return;
+        }
 
         const query = "SELECT id, otp, expires_at FROM otp_table WHERE id = ? AND email = ?";
         const result = await client.execute(query, [otpId, email], { prepare: true });
@@ -120,6 +179,9 @@ router.post("/verify-otp", async (req, res) => {
             return res.status(400).json({ message: "❌ OTP has expired" });
         }
 
+        // Delete used OTP
+        const deleteQuery = "DELETE FROM otp_table WHERE email = ? AND id = ?";
+        await client.execute(deleteQuery, [email, latestOTP.id], { prepare: true });
 
         const userQuery = "SELECT id, role, name FROM users WHERE email = ?";
         const userResult = await client.execute(userQuery, [email], { prepare: true });
@@ -134,7 +196,7 @@ router.post("/verify-otp", async (req, res) => {
             email: email,
             role: user.role,
             name: user.name
-        }, process.env.JWT_SECRET_KEY, {expiresIn:'7d'})
+        }, process.env.JWT_SECRET_KEY, {expiresIn:'30d'})
         res.json({
             message: "✅ OTP verified successfully",
             role: user.role,

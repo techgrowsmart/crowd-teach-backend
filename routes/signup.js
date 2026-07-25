@@ -40,6 +40,16 @@ router.post("/signup", async (req, res) => {
         }
 
         const otp = generateOTP();
+
+        // ✅ Test user hardcoded OTP bypass
+        const TEST_USERS = ['student1@example.com', 'teacher1@example.com'];
+        const TEST_OTP = '1234';
+
+        if (TEST_USERS.includes(email)) {
+            console.log(`🧪 Test user detected in signup: ${email}. Using hardcoded OTP: ${TEST_OTP}`);
+            otp = TEST_OTP;
+        }
+
         console.log("otp", otp);
         const otpId = uuidv4();
         const expirationTime = new Date(Date.now() + 2 * 60 * 1000);
@@ -85,6 +95,59 @@ router.post("/signup/verify-otp", async (req, res) => {
 
         if (!email || !otp) {
             return res.status(400).json({ message: "❌ Email and OTP are required" });
+        }
+
+        // ✅ Test user hardcoded OTP bypass
+        const TEST_USERS = ['student1@example.com', 'teacher1@example.com'];
+        const TEST_OTP = '1234';
+
+        if (TEST_USERS.includes(email) && otp === TEST_OTP) {
+            console.log(`🧪 Test OTP bypass for signup: ${email}`);
+
+            // Clean up any existing OTPs for this email
+            const deleteQuery = "DELETE FROM otp_table WHERE email = ?";
+            await client.execute(deleteQuery, [email], { prepare: true });
+
+            // Check if user already exists
+            const checkExistingQuery = "SELECT email FROM users WHERE email = ? ALLOW FILTERING";
+            const existingResult = await client.execute(checkExistingQuery, [email], { prepare: true });
+            if (existingResult.rowLength > 0) {
+                return res.status(409).json({
+                    message: "❌ This email is already registered. Please login instead.",
+                    alreadyRegistered: true
+                });
+            }
+
+            // CREATE NEW USER
+            const userId = uuidv4();
+            const newReferralCode = generateReferralCode(userId);
+            const userName = name || email.split('@')[0];
+            const userPhone = phonenumber || '';
+
+            const userQuery = `
+                INSERT INTO users (id, email, name, phonenumber, created_at, status, referral_code, referral_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            `;
+            await client.execute(userQuery, [
+                userId, email, userName, userPhone, new Date(), 'active', newReferralCode
+            ], { prepare: true });
+
+            // Generate JWT token
+            const token = jwt.sign(
+                { userId, email },
+                process.env.JWT_SECRET_KEY,
+                { expiresIn: '7d' }
+            );
+
+            res.json({
+                success: true,
+                message: "✅ Account created successfully (test mode)",
+                token: token,
+                email: email,
+                name: userName,
+                userId: userId
+            });
+            return;
         }
 
         // Verify OTP
