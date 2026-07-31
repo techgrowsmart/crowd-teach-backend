@@ -10,6 +10,7 @@ const path = require("path");
 const fs = require("fs");
 const verifyToken = require("./utils/verifyToken")
 const { encrypt, decrypt } = require("./utils/encryption");
+const { syncProfileImageToUsers } = require("./utils/syncProfileImage");
 const connectMongoDB = require('./config/mongoDB');
 const app = express();
 const axios = require('axios');
@@ -1172,6 +1173,8 @@ console.log("Cate",req.body)
 
       await client.execute(insertInfoQuery, infoParams, { prepare: true });
     }
+
+    await syncProfileImageToUsers(email, profilePic || "");
 
     res.status(200).json({ message: "Teacher data saved successfully" });
   } catch (error) {

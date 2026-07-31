@@ -5,6 +5,10 @@ const verifyToken = require("../utils/verifyToken");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
+const multer = require("multer");
+const path = require("path");
+const { s3 } = require("../config/s3");
+const multerS3 = require("multer-s3");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 const JWT_SECRET_KEY = process.env.JWT_SECRET_KEY || JWT_SECRET;
@@ -336,7 +340,7 @@ router.get("/dashboard-data", verifyToken, async (req, res) => {
             });
         }
 
-        const query = "SELECT id, email, name, role, status FROM users";
+        const query = "SELECT id, email, name, role, status, profileimage FROM users";
         const result = await client.execute(query, { prepare: true });
 
         const users = result.rows.map(row => ({
@@ -344,7 +348,8 @@ router.get("/dashboard-data", verifyToken, async (req, res) => {
             email: row.email,
             name: row.name,
             role: row.role,
-            status: row.status
+            status: row.status,
+            profileimage: row.profileimage || null
         }));
 
         res.json({
@@ -436,14 +441,16 @@ router.get("/all-subjects", verifyToken, checkAdminRole, async (req, res) => {
 
     const teacherEmails = [...new Set(result.rows.map((r) => r.teacher_email).filter(Boolean))];
     const teacherNamesMap = {};
+    const teacherProfileMap = {};
 
     if (teacherEmails.length > 0) {
       try {
         const placeholders = teacherEmails.map(() => "?").join(",");
-        const teacherQuery = `SELECT email, name FROM teachers1 WHERE email IN (${placeholders}) ALLOW FILTERING`;
+        const teacherQuery = `SELECT email, name, profilepic FROM teachers1 WHERE email IN (${placeholders}) ALLOW FILTERING`;
         const teacherResult = await client.execute(teacherQuery, teacherEmails, { prepare: true });
         teacherResult.rows.forEach((r) => {
           teacherNamesMap[r.email] = r.name;
+          teacherProfileMap[r.email] = r.profilepic;
         });
       } catch (err) {
         console.error("Error fetching teacher names from teachers1:", err.message);
@@ -476,6 +483,7 @@ router.get("/all-subjects", verifyToken, checkAdminRole, async (req, res) => {
       teacher_email: row.teacher_email || "",
       teaching_category: row.teaching_category || "",
       teacher_name: teacherNamesMap[row.teacher_email] || row.teacher_email?.split("@")[0] || "Unknown",
+      teacher_profilepic: teacherProfileMap[row.teacher_email] || null
     }));
 
     res.json({
@@ -501,14 +509,16 @@ router.get("/published-subjects", verifyToken, checkAdminRole, async (req, res) 
 
     const teacherEmails = [...new Set(result.rows.map((r) => r.teacher_email).filter(Boolean))];
     const teacherNamesMap = {};
+    const teacherProfileMap = {};
 
     if (teacherEmails.length > 0) {
       try {
         const placeholders = teacherEmails.map(() => "?").join(",");
-        const teacherQuery = `SELECT email, name FROM teachers1 WHERE email IN (${placeholders}) ALLOW FILTERING`;
+        const teacherQuery = `SELECT email, name, profilepic FROM teachers1 WHERE email IN (${placeholders}) ALLOW FILTERING`;
         const teacherResult = await client.execute(teacherQuery, teacherEmails, { prepare: true });
         teacherResult.rows.forEach((r) => {
           teacherNamesMap[r.email] = r.name;
+          teacherProfileMap[r.email] = r.profilepic;
         });
       } catch (err) {
         console.error("Error fetching teacher names from teachers1:", err.message);
@@ -541,6 +551,7 @@ router.get("/published-subjects", verifyToken, checkAdminRole, async (req, res) 
       teacher_email: row.teacher_email || "",
       teaching_category: row.teaching_category || "",
       teacher_name: teacherNamesMap[row.teacher_email] || row.teacher_email?.split("@")[0] || "Unknown",
+      teacher_profilepic: teacherProfileMap[row.teacher_email] || null
     }));
 
     res.json({
@@ -599,6 +610,309 @@ router.post("/update-subject-status", verifyToken, checkAdminRole, async (req, r
       success: false,
       message: "Failed to update subject status",
       error: error.message,
+    });
+  }
+});
+
+// DELETE /api/admin/users/:id - Remove a user from the database (admin only)
+router.delete("/users/:id", verifyToken, checkAdminRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const query = "DELETE FROM users WHERE id = ?";
+    await client.execute(query, [id], { prepare: true });
+
+    console.log(`✅ User ${id} deleted successfully`);
+
+    res.json({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting user:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete user",
+      error: error.message,
+    });
+  }
+});
+
+// =============================================================================
+// Advertisement Management (S3 image upload + MongoDB storage)
+// =============================================================================
+
+// MongoDB schema for advertisements
+const AdSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  subtitle: { type: String, default: '' },
+  cta: { type: String, default: 'Learn More' },
+  tag: { type: String, default: 'ADVERTISEMENT' },
+  imageUrl: { type: String, default: null },
+  gradient: { type: [String], default: ['#4F46E5', '#7C3AED'] },
+  accent: { type: String, default: '#A78BFA' },
+  icon: { type: String, default: 'school-outline' },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { collection: 'ads' });
+
+const Ad = mongoose.models.Ad || mongoose.model('Ad', AdSchema);
+
+// Multer-S3 upload for ad banner images
+const adImageUpload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    metadata: (req, file, cb) => {
+      cb(null, { fieldName: file.fieldname });
+    },
+    key: (req, file, cb) => {
+      const ext = path.extname(file.originalname) || '.jpg';
+      cb(null, `ad-images/${Date.now()}-${file.originalname}`);
+    }
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed'), false);
+    }
+  }
+});
+
+// POST /api/admin/ads - Create a new advertisement with S3 image upload (admin only)
+router.post('/ads', verifyToken, checkAdminRole, adImageUpload.single('image'), async (req, res) => {
+  try {
+    const { title, subtitle, cta, tag, gradient, accent, icon } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title is required'
+      });
+    }
+
+    let imageUrl = null;
+    if (req.file) {
+      imageUrl = req.file.location;
+    }
+
+    let parsedGradient = ['#4F46E5', '#7C3AED'];
+    if (gradient) {
+      try {
+        parsedGradient = typeof gradient === 'string' ? JSON.parse(gradient) : gradient;
+      } catch (e) {
+        parsedGradient = gradient.split(',');
+      }
+    }
+
+    const newAd = new Ad({
+      title: title.trim(),
+      subtitle: subtitle || '',
+      cta: cta || 'Learn More',
+      tag: tag || 'ADVERTISEMENT',
+      imageUrl,
+      gradient: parsedGradient,
+      accent: accent || '#A78BFA',
+      icon: icon || 'school-outline',
+      isActive: true
+    });
+
+    await newAd.save();
+
+    console.log(`✅ Ad created: ${newAd._id}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Advertisement created successfully',
+      ad: {
+        id: newAd._id.toString(),
+        title: newAd.title,
+        subtitle: newAd.subtitle,
+        cta: newAd.cta,
+        tag: newAd.tag,
+        imageUrl: newAd.imageUrl,
+        gradient: newAd.gradient,
+        accent: newAd.accent,
+        icon: newAd.icon,
+        isActive: newAd.isActive,
+        createdAt: newAd.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error creating ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create advertisement',
+      error: error.message
+    });
+  }
+});
+
+// GET /api/admin/ads - Public endpoint to get all active ads (used by AdvertisementBanner)
+router.get('/ads', async (req, res) => {
+  try {
+    const ads = await Ad.find({ isActive: true })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedAds = ads.map(ad => ({
+      id: ad._id.toString(),
+      imageUrl: ad.imageUrl || null,
+      tag: ad.tag || 'ADVERTISEMENT',
+      title: ad.title || '',
+      subtitle: ad.subtitle || '',
+      cta: ad.cta || 'Learn More',
+      gradient: ad.gradient || ['#4F46E5', '#7C3AED'],
+      accent: ad.accent || '#A78BFA',
+      icon: ad.icon || 'school-outline'
+    }));
+
+    res.json(formattedAds);
+  } catch (error) {
+    console.error('❌ Error fetching ads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch advertisements',
+      error: error.message
+    });
+  }
+});
+
+// GET /api/admin/ads/all - Get all ads for admin management (admin only)
+router.get('/ads/all', verifyToken, checkAdminRole, async (req, res) => {
+  try {
+    const ads = await Ad.find({})
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedAds = ads.map(ad => ({
+      id: ad._id.toString(),
+      title: ad.title,
+      subtitle: ad.subtitle,
+      cta: ad.cta,
+      tag: ad.tag,
+      imageUrl: ad.imageUrl,
+      gradient: ad.gradient,
+      accent: ad.accent,
+      icon: ad.icon,
+      isActive: ad.isActive,
+      createdAt: ad.createdAt,
+      updatedAt: ad.updatedAt
+    }));
+
+    res.json({
+      success: true,
+      ads: formattedAds
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all ads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch advertisements',
+      error: error.message
+    });
+  }
+});
+
+// PUT /api/admin/ads/:id - Update an advertisement (admin only)
+router.put('/ads/:id', verifyToken, checkAdminRole, adImageUpload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, subtitle, cta, tag, gradient, accent, icon, isActive } = req.body;
+
+    const updateData = {};
+    if (title !== undefined) updateData.title = title.trim();
+    if (subtitle !== undefined) updateData.subtitle = subtitle;
+    if (cta !== undefined) updateData.cta = cta;
+    if (tag !== undefined) updateData.tag = tag;
+    if (gradient !== undefined) {
+      try {
+        updateData.gradient = typeof gradient === 'string' ? JSON.parse(gradient) : gradient;
+      } catch (e) {
+        updateData.gradient = gradient.split(',');
+      }
+    }
+    if (accent !== undefined) updateData.accent = accent;
+    if (icon !== undefined) updateData.icon = icon;
+    if (isActive !== undefined) updateData.isActive = isActive === 'true' || isActive === true;
+
+    if (req.file) {
+      updateData.imageUrl = req.file.location;
+    }
+
+    updateData.updatedAt = new Date();
+
+    const updatedAd = await Ad.findOneAndUpdate(
+      { _id: id },
+      updateData,
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (!updatedAd) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Advertisement updated successfully',
+      ad: {
+        id: updatedAd._id.toString(),
+        title: updatedAd.title,
+        subtitle: updatedAd.subtitle,
+        cta: updatedAd.cta,
+        tag: updatedAd.tag,
+        imageUrl: updatedAd.imageUrl,
+        gradient: updatedAd.gradient,
+        accent: updatedAd.accent,
+        icon: updatedAd.icon,
+        isActive: updatedAd.isActive,
+        createdAt: updatedAd.createdAt,
+        updatedAt: updatedAd.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error updating ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update advertisement',
+      error: error.message
+    });
+  }
+});
+
+// DELETE /api/admin/ads/:id - Delete an advertisement (admin only)
+router.delete('/ads/:id', verifyToken, checkAdminRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const deletedAd = await Ad.findByIdAndDelete(id);
+
+    if (!deletedAd) {
+      return res.status(404).json({
+        success: false,
+        message: 'Advertisement not found'
+      });
+    }
+
+    console.log(`✅ Ad deleted: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Advertisement deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error deleting ad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete advertisement',
+      error: error.message
     });
   }
 });

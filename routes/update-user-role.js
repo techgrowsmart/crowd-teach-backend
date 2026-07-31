@@ -5,6 +5,8 @@ const multerS3 = require("multer-s3")
 const multer = require("multer")
 const { s3 } = require("./../config/s3")
 const verifyToken = require('./../utils/verifyToken')
+const { syncProfileImageToUsers } = require('../utils/syncProfileImage');
+
 const upload = multer({
     storage: multerS3({
         s3: s3,
@@ -97,6 +99,7 @@ router.post(
             ];
 
             await client.execute(studentQuery, params, { prepare: true });
+            await syncProfileImageToUsers(email, profileImageUrl);
             console.log("res",res.json)
             return res.status(200).json({
                 message: "✅ Student profile updated successfully",
@@ -178,6 +181,7 @@ router.post(
             ];
 
             await client.execute(studentQuery, params, { prepare: true });
+            await syncProfileImageToUsers(email, profileimage);
             console.log("res",res.json)
             return res.status(200).json({
                 message: "✅ Student profile updated successfully"
@@ -284,6 +288,7 @@ router.post("/update-profile",verifyToken, upload.single("profileimage"), async 
         ]
         console.log("1234")
         await client.execute(studentQuerry,params,{prepare:true})
+        await syncProfileImageToUsers(email, profileImageUrl);
         console.log(`✅ Profile updated for user ID: ${userId}`);
 
         return res.status(200).json({ message: "✅ Profile updated successfully", imageUrl: profileImageUrl });
@@ -326,6 +331,7 @@ router.post("/upload-profile-img", upload.single("profileimage"), async (req, re
         const updateParamsTeachers = [profileImageUrl,email,name];
 
         await  client.execute(teacherProfile,updateParamsTeachers,{prepare:true})
+        await syncProfileImageToUsers(email, profileImageUrl);
         console.log("123245566777888")
         return res.status(200).json({
             message: "✅ Profile image uploaded successfully",

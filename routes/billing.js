@@ -17,6 +17,14 @@ const client = new cassandra.Client({
   },
 });
 
+function checkAdminRole(req, res, next) {
+  const adminRole = req.user.role;
+  if (adminRole !== "admin" && adminRole !== "superadmin" && adminRole !== "moderator") {
+    return res.status(403).json({ success: false, message: "Access denied" });
+  }
+  next();
+}
+
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const BRAND_DARK   = "#0F172A"; // slate-900
 const BRAND_ACCENT = "#4F46E5"; // indigo-600
@@ -281,6 +289,81 @@ router.get("/download-teacher-invoice/:invoiceId", verifyToken, async (req, res)
   } catch (error) {
     console.error("Error generating teacher invoice PDF:", error);
     res.status(500).json({ success: false, message: "Failed to generate invoice" });
+  }
+});
+
+// ========================== ADMIN: SPOTLIGHT PURCHASES ==========================
+
+// GET /api/billing/spotlight-purchases - Admin endpoint to get all spotlight purchase data
+router.get("/spotlight-purchases", verifyToken, checkAdminRole, async (req, res) => {
+  try {
+    const invoicesQuery = `SELECT * FROM teacher_invoices`;
+    const invoicesResult = await client.execute(invoicesQuery, [], { prepare: true });
+
+    const purchases = [];
+    for (const row of invoicesResult.rows) {
+      const planTitle = row.plan_title || "";
+      if (!planTitle.toLowerCase().includes("spotlight")) continue;
+
+      // Get spotlight states for this invoice
+      let purchasedStates = [];
+      try {
+        const statesQuery = `SELECT state, spotlight_type FROM spotlight_states WHERE invoice_id = ?`;
+        const statesResult = await client.execute(statesQuery, [row.invoice_id], { prepare: true });
+        purchasedStates = statesResult.rows.map((r) => ({
+          state: r.state || "N/A",
+          spotlightType: r.spotlight_type || "N/A",
+        }));
+      } catch (stateErr) {
+        console.warn("⚠️ spotlight_states query skipped:", stateErr.message);
+      }
+
+      // Extract spotlight type from description if no states found
+      let spotlightType = "N/A";
+      if (purchasedStates.length === 0 && row.description) {
+        const match = row.description.match(/\(([^)]+)\)$/);
+        if (match) spotlightType = match[1];
+      }
+
+      // Get teacher name from teachers1
+      let teacherName = row.teacher_email?.split("@")[0] || "Unknown";
+      try {
+        const teacherQuery = `SELECT name FROM teachers1 WHERE email = ? ALLOW FILTERING`;
+        const teacherResult = await client.execute(teacherQuery, [row.teacher_email], { prepare: true });
+        if (teacherResult.rowLength > 0) {
+          teacherName = teacherResult.rows[0].name;
+        }
+      } catch (e) {
+        // keep fallback name
+      }
+
+      // Use spotlight_states if available, otherwise fall back to invoice location
+      const statesToShow = purchasedStates.length > 0 ? purchasedStates : [
+        { state: row.location_state || "N/A", spotlightType }
+      ];
+
+      for (const st of statesToShow) {
+        purchases.push({
+          teacherName,
+          teacherEmail: row.teacher_email || "",
+          homeState: row.location_state || "N/A",
+          homeCity: row.location_city || "N/A",
+          purchaseState: st.state,
+          spotlightType: st.spotlightType,
+          amount: parseFloat(row.total_amount || 0),
+          currency: row.currency || "INR",
+          status: (row.status || "N/A").charAt(0).toUpperCase() + (row.status || "N/A").slice(1),
+          date: row.date ? new Date(row.date).toISOString().split("T")[0] : "N/A",
+          planTitle,
+          invoiceId: row.invoice_id?.toString() || "",
+        });
+      }
+    }
+
+    res.json({ success: true, purchases });
+  } catch (error) {
+    console.error("Error fetching spotlight purchases:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch spotlight purchases" });
   }
 });
 

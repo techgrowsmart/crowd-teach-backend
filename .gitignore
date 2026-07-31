@@ -131,7 +131,7 @@ certs/
 *.crt
 
 # Test files
-test-teacher-profile.js
+
 request_logger_simulation_test.spec.js
 
 # IDE files
