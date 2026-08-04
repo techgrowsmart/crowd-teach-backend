@@ -8,6 +8,19 @@ const router = express.Router();
 
 const generateOTP = () => Math.floor(1000 + Math.random() * 9000).toString();
 
+const INACTIVE_MSG = 'due to some violations your account is on hold Try contacting admin of growsmart';
+
+const isUserInactive = (user) => {
+    if (!user || !user.status) return false;
+    return user.status.toLowerCase() === 'inactive';
+};
+
+const inactiveResponse = () => ({
+    message: 'Account on hold due to some violations. Please contact the admin of growsmart.',
+    accountStatus: 'inactive',
+    onHoldMessage: INACTIVE_MSG
+});
+
 router.post("/login", async (req, res) => {
     try {
         console.log("📥 Received Login Request:", req.body);
@@ -34,22 +47,8 @@ router.post("/login", async (req, res) => {
 
         const user = userResult.rows[0];
 
-
-        // Students should always be active, teachers can be active or dormant
-        if (user.role === 'student' && user.status !== 'active') {
-            // Auto-activate students if they're not active
-            console.log(`📚 Auto-activating student: ${email}`);
-            const updateQuery = "UPDATE users SET status = 'active' WHERE id = ?";
-            await client.execute(updateQuery, [user.id], { prepare: true });
-            user.status = 'active'; // Update in memory
-        } else if (user.role === 'teacher' && user.status !== 'active' && user.status !== 'dormant' && user.status !== 'resubmit') {
-            // Teachers must be active, dormant, or resubmit
-            return res.status(403).json({
-                message: "Your account is not active. Please contact support.",
-                isRegistered: true,
-                status: user.status,
-                role: user.role,
-            });
+        if (isUserInactive(user)) {
+            return res.status(403).json(inactiveResponse());
         }
 
         // ✅ Test user hardcoded OTP bypass
@@ -126,6 +125,17 @@ router.post("/verify-otp", async (req, res) => {
             return res.status(400).json({ message: "❌ Email, OTP, and OTP ID are required" });
         }
 
+        // Check if user account is inactive/on hold BEFORE OTP verification
+        const statusCheckQuery = "SELECT status FROM users WHERE email = ?";
+        const statusResult = await client.execute(statusCheckQuery, [email], { prepare: true });
+
+        if (statusResult.rowLength > 0) {
+            const currentUser = statusResult.rows[0];
+            if (isUserInactive(currentUser)) {
+                return res.status(403).json(inactiveResponse());
+            }
+        }
+
         // ✅ Test user hardcoded OTP bypass
         const TEST_USERS = ['student1@example.com', 'teacher1@example.com'];
         const TEST_OTP = '1234';
@@ -191,6 +201,7 @@ router.post("/verify-otp", async (req, res) => {
         }
 
         const user = userResult.rows[0];
+
         const token = jwt.sign({
             userId: user.id,
             email: email,
@@ -219,7 +230,7 @@ router.post('/refresh-token', async (req, res) => {
     }
     
     // Get user info from Cassandra
-    const userQuery = "SELECT id, role, name FROM users WHERE email = ? ALLOW FILTERING";
+    const userQuery = "SELECT id, role, name, status FROM users WHERE email = ? ALLOW FILTERING";
     const userResult = await client.execute(userQuery, [email], { prepare: true });
     
     if (userResult.rowLength === 0) {
@@ -228,13 +239,18 @@ router.post('/refresh-token', async (req, res) => {
     
     const user = userResult.rows[0];
     
+    // Check if user account is inactive/on hold
+    if (isUserInactive(user)) {
+      return res.status(403).json(inactiveResponse());
+    }
+    
     // Create new token with role and name
     const token = jwt.sign({
       userId: user.id,
       email: email,
       role: user.role,
       name: user.name
-    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '30d' });
     
     res.json({
       success: true,
@@ -283,7 +299,7 @@ router.post('/admin-login', async (req, res) => {
         email: email,
         role: user.role,
         name: user.name
-      }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+      }, process.env.JWT_SECRET_KEY, { expiresIn: '30d' });
       
       res.json({
         success: true,
@@ -305,9 +321,9 @@ router.post('/admin-login', async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Admin role required.' });
     }
     
-    // Check if user is active
-    if (user.status !== 'active') {
-      return res.status(403).json({ message: 'Account is not active' });
+    // Check if user account is inactive/on hold
+    if (isUserInactive(user)) {
+      return res.status(403).json(inactiveResponse());
     }
     
     // Simple password check (in production, use bcrypt)
@@ -325,7 +341,7 @@ router.post('/admin-login', async (req, res) => {
       email: email,
       role: user.role,
       name: user.name
-    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '30d' });
     
     res.json({
       success: true,
@@ -364,6 +380,11 @@ router.post('/check-user', async (req, res) => {
     }
     
     const user = userResult.rows[0];
+    
+    // Block inactive/on-hold users
+    if (isUserInactive(user)) {
+      return res.status(403).json(inactiveResponse());
+    }
     
     res.json({
       exists: true,
@@ -410,7 +431,7 @@ router.post('/update-role', async (req, res) => {
     const status = 'active';
     await client.execute(updateQuery, [role, status, userId], { prepare: true });
     
-    // Insert role-specific record
+// Insert role-specific record
     if (role === 'teacher') {
       const insertTeacherQuery = "INSERT INTO teachers1 (email, name) VALUES (?, ?)";
       await client.execute(insertTeacherQuery, [email, userName], { prepare: true });
@@ -418,14 +439,14 @@ router.post('/update-role', async (req, res) => {
       const insertStudentQuery = "INSERT INTO student (email, name, phone_number) VALUES (?, ?, ?)";
       await client.execute(insertStudentQuery, [email, userName, userPhone], { prepare: true });
     }
-    
+
     // Generate new token with updated role
-    const token = jwt.sign({
-      userId: userId,
-      email: email,
-      role: role,
-      name: userName
-    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+     const token = jwt.sign({
+       userId: userId,
+       email: email,
+       role: role,
+       name: userName
+     }, process.env.JWT_SECRET_KEY, { expiresIn: '30d' });
     
     res.json({
       success: true,
@@ -477,30 +498,19 @@ router.post('/google-login', async (req, res) => {
     } else {
       user = userResult.rows[0];
     }
-    
-    // Students should always be active, teachers can be active, dormant, or resubmit
-    if (user.role === 'student' && user.status !== 'active') {
-      // Auto-activate students if they're not active
-      console.log(`📚 Auto-activating student for Google login: ${email}`);
-      const updateQuery = "UPDATE users SET status = 'active' WHERE id = ?";
-      await client.execute(updateQuery, [user.id], { prepare: true });
-      user.status = 'active'; // Update in memory
-    } else if (user.role === 'teacher' && user.status !== 'active' && user.status !== 'dormant' && user.status !== 'resubmit') {
-      // Teachers must be active, dormant, or resubmit
-      return res.status(403).json({
-        message: 'Your account is not active. Please contact support.',
-        status: user.status,
-        role: user.role
-      });
+
+    // Check if user account is inactive/on hold
+    if (isUserInactive(user)) {
+      return res.status(403).json(inactiveResponse());
     }
-    
+      
     // Generate JWT token
     const token = jwt.sign({
       userId: user.id,
       email: user.email,
       role: user.role,
       name: user.name || name
-    }, process.env.JWT_SECRET_KEY, { expiresIn: '7d' });
+    }, process.env.JWT_SECRET_KEY, { expiresIn: '30d' });
     
     res.json({
       success: true,

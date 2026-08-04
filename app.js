@@ -163,8 +163,6 @@ const verifySubscription = async (req, res, next) => {
 
     const currentDate = new Date();
     
-    const query = `SELECT * FROM user_subscriptions WHERE user_email = ? AND validity_date >= ? AND subscription_status = ? ALLOW FILTERING`;
-    
     const result = await client.execute(query, [user_email, currentDate, 'active'], { prepare: true });
     
     if (result.rowLength === 0) {
@@ -458,99 +456,6 @@ const createUsersTable = async () => {
   }
 };
 
-const createDashboardUsersTable = async () => {
-  try {
-    const query = `
-      CREATE TABLE IF NOT EXISTS dashboard_users (
-        id UUID,
-        email TEXT,
-        name TEXT,
-        phonenumber TEXT,
-        role TEXT,
-        department TEXT,
-        location TEXT,
-        status TEXT,
-        created_at TIMESTAMP,
-        actions LIST<TEXT>,
-        PRIMARY KEY (id)
-      )
-    `;
-
-    const indexQuery = `
-      CREATE INDEX IF NOT EXISTS ON dashboard_users(email);
-    `;
-
-    await client.execute(query);
-    await client.execute(indexQuery);
-    console.log("✅ dashboard_users table created successfully.");
-  } catch (error) {
-    console.error("❌ Error creating dashboard_users table:", error.message);
-  }
-};
-
-const createInitialAdminUser = async () => {
-  try {
-    const { v4: uuidv4 } = require('uuid');
-    const bcrypt = require('bcrypt');
-    const mongoose = require('mongoose');
-
-    // Connect to MongoDB if not already connected
-    if (mongoose.connection.readyState !== 1) {
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true
-      });
-    }
-
-    // Define AdminPassword schema
-    const AdminPasswordSchema = new mongoose.Schema({
-      email: { type: String, required: true, unique: true },
-      passwordHash: { type: String, required: true },
-      createdAt: { type: Date, default: Date.now }
-    });
-
-    const AdminPassword = mongoose.models.AdminPassword || mongoose.model('AdminPassword', AdminPasswordSchema);
-
-    const adminEmail = 'contact@gogrowsmart.com';
-    const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
-
-    // Check if admin already exists in dashboard_users
-    const checkQuery = `SELECT email FROM dashboard_users WHERE email = ? ALLOW FILTERING`;
-    const checkResult = await client.execute(checkQuery, [adminEmail], { prepare: true });
-
-    if (checkResult.rows.length === 0) {
-      // Hash password
-      const hashedPassword = await bcrypt.hash(adminPassword, 10);
-
-      // Create admin user in dashboard_users
-      const userId = uuidv4();
-      const insertQuery = `INSERT INTO dashboard_users (id, email, name, role, status, created_at, actions)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)`;
-      await client.execute(insertQuery, [
-        userId,
-        adminEmail,
-        'Admin',
-        'superadmin',
-        'active',
-        new Date(),
-        []
-      ], { prepare: true });
-
-      // Store password in MongoDB
-      await AdminPassword.create({
-        email: adminEmail,
-        passwordHash: hashedPassword
-      });
-
-      console.log("✅ Initial admin user created successfully:", adminEmail);
-    } else {
-      console.log("ℹ️  Admin user already exists:", adminEmail);
-    }
-  } catch (error) {
-    console.error("❌ Error creating initial admin user:", error.message);
-  }
-};
-
 const createSubjectsTable = async () => {
   try {
       const query = `
@@ -577,8 +482,7 @@ const createSubjectsTable = async () => {
 // Call this function after other table creations (non-blocking)
 setTimeout(() => createSubjectsTable().catch(err => console.error('❌ Subjects table creation failed:', err.message)), 15000);
 setTimeout(() => createUsersTable().catch(err => console.error('❌ Users table creation failed:', err.message)), 16000);
-setTimeout(() => createDashboardUsersTable().catch(err => console.error('❌ Dashboard users table creation failed:', err.message)), 17000);
-setTimeout(() => createInitialAdminUser().catch(err => console.error('❌ Initial admin user creation failed:', err.message)), 18000);
+
 const createTeacherTables = async () => {
   try {
     await client.execute(`
@@ -708,22 +612,6 @@ setTimeout(() => createTeacherTables().catch(err => console.error('❌ Teacher t
 setTimeout(() => tutorsRegistration().catch(err => console.error('❌ Tutors registration failed:', err.message)), 7000);
 setTimeout(() => createOtpTable().catch(err => console.error('❌ OTP table creation failed:', err.message)), 9000);
 
-const createWalletTables = async () => {
-  try {
-    await client.execute(`
-      CREATE TABLE IF NOT EXISTS student_wallets (
-        email text PRIMARY KEY,
-        balance counter
-      )
-    `);
-
-
-    console.log('✅ Wallet tables created successfully');
-  } catch (error) {
-    console.error('❌ Error creating wallet tables:', error.message);
-  }
-};
-setTimeout(() => createWalletTables().catch(err => console.error('❌ Wallet tables creation failed:', err.message)), 12000);
 
 const createBroadcastTables = async () => {
   try {

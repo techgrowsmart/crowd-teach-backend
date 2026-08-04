@@ -25,14 +25,21 @@ router.post("/signup", async (req, res) => {
             return res.status(400).json({ message: "❌ Invalid email format" });
         }
 
-        // Check if user already exists (active)
+        // Check if user already exists
         try {
             const checkUserQuery = "SELECT email, status FROM users WHERE email = ? ALLOW FILTERING";
             const userResult = await client.execute(checkUserQuery, [email], { prepare: true });
-            if (userResult.rowLength > 0 && userResult.rows[0].status === "active") {
+            if (userResult.rowLength > 0 && userResult.rows[0].status.toLowerCase() === 'active') {
                 return res.status(400).json({
                     message: "❌ This email is already registered. Please login instead.",
                     alreadyRegistered: true
+                });
+            }
+            if (userResult.rowLength > 0 && userResult.rows[0].status.toLowerCase() === 'inactive') {
+                return res.status(403).json({
+                    message: 'Account on hold',
+                    accountStatus: 'inactive',
+                    onHoldMessage: 'due to some violations your account is on hold Try contacting admin of growsmart'
                 });
             }
         } catch (checkError) {
@@ -95,6 +102,21 @@ router.post("/signup/verify-otp", async (req, res) => {
 
         if (!email || !otp) {
             return res.status(400).json({ message: "❌ Email and OTP are required" });
+        }
+
+        // Check if user account is inactive/on hold before allowing signup
+        const statusCheckQuery = "SELECT status FROM users WHERE email = ? ALLOW FILTERING";
+        const statusResult = await client.execute(statusCheckQuery, [email], { prepare: true });
+
+        if (statusResult.rowLength > 0) {
+            const existingUser = statusResult.rows[0];
+            if (existingUser.status.toLowerCase() === 'inactive') {
+                return res.status(403).json({
+                    message: 'Account on hold',
+                    accountStatus: 'inactive',
+                    onHoldMessage: 'due to some violations your account is on hold Try contacting admin of growsmart'
+                });
+            }
         }
 
         // ✅ Test user hardcoded OTP bypass

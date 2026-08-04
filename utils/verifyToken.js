@@ -2,6 +2,9 @@ const jwt = require('jsonwebtoken');
 
 const verifyToken = (req, res, next) => {
     // Debug logging
+    console.log('🔍 Auth Debug - Headers:', Object.keys(req.headers));
+    console.log('🔍 Auth Debug - Authorization Header:', req.headers.authorization);
+    console.log('🔍 Auth Debug - JWT_SECRET_KEY exists:', !!process.env.JWT_SECRET_KEY);
     
     const authHeader = req.headers.authorization;
     const token = authHeader?.split(" ")[1];
@@ -11,7 +14,7 @@ const verifyToken = (req, res, next) => {
         return res.status(401).json({ message: 'No token provided' });
     }
 
-    
+    console.log('🔍 Token extracted:', token.substring(0, 20) + '...');
 
     jwt.verify(token, process.env.JWT_SECRET_KEY, (err, decoded) => {
         if (err) {
@@ -31,7 +34,7 @@ const verifyToken = (req, res, next) => {
             }
         }
 
-        
+        console.log('✅ Token verified successfully for user:', decoded.email);
         req.user = decoded; // Add decoded payload to request
         next();
     });
