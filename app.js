@@ -34,6 +34,16 @@ const corsOptions = {
       return callback(null, true);
     }
     
+    // Allow local network IPs for mobile development
+    if (origin.includes('192.168.') || origin.includes('10.') || origin.includes('172.')) {
+      return callback(null, true);
+    }
+    
+    // Allow Expo Go app
+    if (origin.includes('exp://') || origin.includes('expo://')) {
+      return callback(null, true);
+    }
+    
     // Allow all gogrowsmart.com subdomains (production)
     if (origin.includes('gogrowsmart.com') || 
         origin.endsWith('.gogrowsmart.com')) {
@@ -229,7 +239,6 @@ app.use("/api",allboards)
 //for create subject - register before messages to prevent route collision
 app.use("/api", createSubject);
 app.use("/api/messages", messages)
-app.use("/api/chat", messages)
 
 // Additional chat endpoints (contacts, etc.)
 const chatRoutes = require('./routes/chat');

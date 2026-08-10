@@ -67,7 +67,6 @@ function getSpotlightCategories(t) {
 
         // Load data from database if Redis is empty
         if (isEmpty) {
-            console.log(`[Redis] Queues empty. Loading teachers from database...`);
             await reloadRedisData();
             redisLastLoaded = Date.now();
         }
@@ -76,7 +75,6 @@ function getSpotlightCategories(t) {
         const needsReload = await shouldReloadRedis(redisSpotlightKey, redisPopularKey);
         
         if (needsReload) {
-            console.log(`� Auto-reloading Redis for fresh data...`);
             await reloadRedisData();
             redisLastLoaded = Date.now();
         }
@@ -160,7 +158,6 @@ function getSpotlightCategories(t) {
                         validEmails.set(row.teacher_email, row.spotlight_type);
                     }
                 }
-                console.log(`🗺️ State [${studentState}]: ${validEmails.size} active spotlight teacher(s):`, [...validEmails.keys()]);
 
                 // Match against full teacher pool (popular+spotlight Redis queues)
                 const spotlightPool = dedupedAll.filter(t => validEmails.has(t.email));
@@ -202,12 +199,6 @@ function getSpotlightCategories(t) {
             ).map(processTeacher);
         }
 
-        console.log(`📊 Results:`, {
-            board, subject,
-            spotlightAfter: filteredSpotlight.length,
-            popularAfter: filteredPopular.length
-        });
-
         const spotlightSkill = filteredSpotlight.filter(t => getSpotlightCategories(t).isSkill);
         const spotlightSubject = filteredSpotlight.filter(t => getSpotlightCategories(t).isSubject);
 
@@ -239,7 +230,6 @@ function getSpotlightCategories(t) {
     } catch (error) {
         console.error("Redis/DB fetch error:", error);
         if (res.headersSent) return;
-        console.log("🔄 Redis failed, falling back to database...");
         return await fetchTeachersFromDatabase(req, res, board, className, subject, university, year, searchQuery, studentState);
     }
 });
@@ -257,14 +247,6 @@ async function shouldReloadRedis(spotlightKey, popularKey) {
         const timeSinceLastLoad = redisLastLoaded ? Date.now() - redisLastLoaded : Infinity;
         const needsTimeBasedReload = timeSinceLastLoad > REDIS_RELOAD_INTERVAL;
         
-        console.log(`🕒 Redis Status:`, {
-            spotlightCount,
-            popularCount, 
-            isEmpty,
-            timeSinceLastLoad: `${Math.round(timeSinceLastLoad / 1000)}s`,
-            needsTimeBasedReload
-        });
-        
         return isEmpty || needsTimeBasedReload;
     } catch (error) {
         console.error("Error checking Redis status:", error);
@@ -274,7 +256,6 @@ async function shouldReloadRedis(spotlightKey, popularKey) {
 
 async function reloadRedisData() {
     try {
-        console.log(`🔄 Loading teachers from TEACHERS1 table...`);
         await ensureRedis();
 
         // Clear existing Redis data
@@ -320,7 +301,6 @@ async function reloadRedisData() {
         await redisClient.expire('teachersQueue:spotlight:', 86400);
         await redisClient.expire('teachersQueue:popular:', 86400);
 
-        console.log(`✅ Loaded ${loadedCount} teachers from TEACHERS1 table into Redis (expires in 24h)`);
         return loadedCount;
     } catch (error) {
         console.error("Error reloading Redis data:", error);
@@ -331,7 +311,6 @@ async function reloadRedisData() {
 // Keep the manual clear endpoint for emergencies
 router.get("/clear-and-reload-redis", async (req, res) => {
     try {
-        console.log("🔄 Manual Redis reload requested...");
         const count = await reloadRedisData();
         redisLastLoaded = Date.now();
         
@@ -411,8 +390,6 @@ router.get("/update-teacher-status", async (req, res) => {
       });
     }
 
-    console.log(`🔄 Status update request for teacher: ${teacherEmail} -> ${status}`);
-
     // Check if teacher exists and get current status
     const checkQuery = `
       SELECT id, email, role, status, name 
@@ -470,9 +447,6 @@ router.get("/update-teacher-status", async (req, res) => {
       prepare: true 
     });
 
-    // Log the status change for audit purposes
-    console.log(`✅ TEACHER STATUS UPDATED: ${teacher.email} (${teacher.name}) - ${teacher.status} -> ${status}`);
-
     // Success response
     return res.status(200).json({
       success: true,
@@ -508,8 +482,6 @@ router.get("/update-teacher-status", async (req, res) => {
 // Fallback function to fetch teachers directly from database when Redis fails
 async function fetchTeachersFromDatabase(req, res, board, className, subject, university, year, searchQuery, studentState) {
     try {
-        console.log("🔄 Fetching teachers directly from teachers1 table...");
-        
         const query = `
             SELECT email, name, category, introduction, isspotlight, profilepic, 
                    qualifications, teachingmode, tuitions, workexperience, spotlight_type
@@ -558,14 +530,10 @@ async function fetchTeachersFromDatabase(req, res, board, className, subject, un
             teachers.push(formattedTeacher);
         }
         
-        console.log(`✅ Loaded ${teachers.length} teachers from database`);
-        
         // Apply filtering
         const filterTeachers = (teachers) => {
             // University flow
             if (university) {
-                console.log(`🔍 Filtering teachers by university:`, { university, year, subject });
-                
                 return teachers.filter(teacher => {
                     let tuitions = teacher.tuitions;
                     if (typeof tuitions === 'string') {

@@ -18,6 +18,7 @@ const initBookingTable = async (client) => {
         teacher_email TEXT,
         subject TEXT,
         class_name TEXT,
+        board_or_university TEXT,
         charge DECIMAL,
         status TEXT,
         created_at TIMESTAMP,
@@ -43,12 +44,22 @@ const initBookingTable = async (client) => {
         student_profile_pic TEXT,
         subject TEXT,
         class_name TEXT,
+        board_or_university TEXT,
+        title TEXT,
         status TEXT,
         created_at TIMESTAMP,
         updated_at TIMESTAMP
       )
     `);
     console.log('✅ contacts table initialized');
+
+    // Ensure the title column exists on already-created tables (no-op if it already exists)
+    try {
+      await client.execute(`ALTER TABLE contacts ADD title TEXT`);
+      console.log('✅ Added title column to contacts table');
+    } catch (alterError) {
+      // Column likely already exists - safe to ignore
+    }
   } catch (error) {
     console.error('❌ Error creating contacts table:', error);
   }
@@ -57,7 +68,7 @@ const initBookingTable = async (client) => {
 // POST /api/bookings/request - Student creates a booking request
 router.post('/request', verifyToken, async (req, res) => {
   try {
-    const { teacherEmail, subject, className, charge, studentInfo } = req.body;
+    const { teacherEmail, subject, className, boardOrUniversity, charge, studentInfo } = req.body;
     const studentEmail = req.user.email;
     const studentName = req.user.name;
 
@@ -74,6 +85,7 @@ router.post('/request', verifyToken, async (req, res) => {
            b.teacherEmail === teacherEmail &&
            b.subject === subject &&
            b.className === (className || '') &&
+           b.boardOrUniversity === (boardOrUniversity || '') &&
            b.status === 'pending'
     );
 
@@ -94,6 +106,7 @@ router.post('/request', verifyToken, async (req, res) => {
       teacherEmail,
       subject,
       className: className || '',
+      boardOrUniversity: boardOrUniversity || '',
       charge: charge || 0,
       status: 'pending',
       timestamp: new Date().toISOString(),
@@ -108,8 +121,8 @@ router.post('/request', verifyToken, async (req, res) => {
       const insertQuery = `
         INSERT INTO booking_requests (
           id, student_email, student_name, teacher_email, subject, class_name,
-          charge, status, created_at, updated_at, student_info, teacher_response
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          board_or_university, charge, status, created_at, updated_at, student_info, teacher_response
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       await client.execute(insertQuery, [
         bookingId,
@@ -118,6 +131,7 @@ router.post('/request', verifyToken, async (req, res) => {
         teacherEmail,
         subject,
         className || '',
+        boardOrUniversity || '',
         charge || 0,
         'pending',
         new Date(),
@@ -445,6 +459,9 @@ router.put('/respond', verifyToken, async (req, res) => {
       });
     }
 
+    // Save previous status to detect actual transitions
+    const previousStatus = booking.status;
+
     // Update booking status in memory
     booking.status = status;
     booking.teacherResponse = message || `Teacher has ${status} your request`;
@@ -465,96 +482,7 @@ router.put('/respond', verifyToken, async (req, res) => {
       // Don't fail the request if DB update fails, in-memory still works
     }
 
-    // If teacher accepts, save the contact record for both sides
-    if (status === 'accepted') {
-      try {
-        // Fetch student profile picture from users table first, then students table
-        let studentProfilePic = null;
-        try {
-          const userQuery = `
-            SELECT name, profileimage
-            FROM users
-            WHERE email = ? LIMIT 1
-          `;
-          const userResult = await client.execute(userQuery, [booking.studentEmail], { prepare: true });
-          if (userResult.rows && userResult.rows.length > 0) {
-            studentProfilePic = userResult.rows[0].profileimage || null;
-          } else {
-            const studentQuery = `
-              SELECT profilepic, profile_pic, profileImage, profile_image, profileimage
-              FROM students
-              WHERE email = ? LIMIT 1
-            `;
-            const studentResult = await client.execute(studentQuery, [booking.studentEmail], { prepare: true });
-            if (studentResult.rows && studentResult.rows.length > 0) {
-              const row = studentResult.rows[0];
-              studentProfilePic = row.profilepic || row.profile_pic || row.profileImage || row.profile_image || row.profileimage || null;
-            }
-          }
-        } catch (profileError) {
-          console.warn('⚠️ Could not fetch student profile picture for contact:', profileError.message);
-        }
-
-        // Fetch teacher profile picture from users table first, then teachers1 table
-        let teacherProfilePic = null;
-        let teacherName = userName || booking.teacherEmail;
-        try {
-          const userQuery = `
-            SELECT name, profileimage
-            FROM users
-            WHERE email = ? LIMIT 1
-          `;
-          const userResult = await client.execute(userQuery, [booking.teacherEmail], { prepare: true });
-          if (userResult.rows && userResult.rows.length > 0) {
-            teacherName = userResult.rows[0].name || teacherName;
-            teacherProfilePic = userResult.rows[0].profileimage || null;
-          }
-          const teacherQuery = `
-            SELECT name, profilepic, profile_pic, profileImage, profile_image, profileimage
-            FROM teachers1
-            WHERE email = ? LIMIT 1
-          `;
-          const teacherResult = await client.execute(teacherQuery, [booking.teacherEmail], { prepare: true });
-          if (teacherResult.rows && teacherResult.rows.length > 0) {
-            const row = teacherResult.rows[0];
-            teacherName = row.name || teacherName;
-            teacherProfilePic = teacherProfilePic || row.profilepic || row.profile_pic || row.profileImage || row.profile_image || row.profileimage || null;
-          }
-        } catch (profileError) {
-          console.warn('⚠️ Could not fetch teacher profile picture for contact:', profileError.message);
-        }
-
-        const contactId = `contact_${booking.teacherEmail}_${booking.studentEmail}_${booking.subject}_${booking.className || 'General'}`
-          .replace(/[^a-zA-Z0-9@._-]/g, '_');
-
-        const insertContactQuery = `
-          INSERT INTO contacts (
-            id, teacher_email, student_email, teacher_name, student_name,
-            teacher_profile_pic, student_profile_pic, subject, class_name, status, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `;
-
-        await client.execute(insertContactQuery, [
-          contactId,
-          booking.teacherEmail,
-          booking.studentEmail,
-          teacherName,
-          booking.studentName,
-          teacherProfilePic,
-          studentProfilePic,
-          booking.subject,
-          booking.className || '',
-          'accepted',
-          new Date(),
-          new Date()
-        ], { prepare: true });
-
-        console.log('✅ Contact saved on teacher accept:', contactId);
-      } catch (contactError) {
-        console.error('❌ Error saving contact on accept:', contactError);
-        // Don't fail the booking response if contact save fails
-      }
-    }
+    // Contact saving removed - contacts will be saved when student sends first message
 
     // If booking is accepted/subscribed, add student to subject group for broadcasting
     if (status === 'accepted' || status === 'subscribed') {
@@ -596,14 +524,15 @@ router.put('/respond', verifyToken, async (req, res) => {
         // Also add to broadcast table for tracking
         const broadcastQuery = `
           INSERT INTO broadcast_table 
-          (teacherEmail, className, subject, studentEmail, teacherName, teacherProfilePic, studentName, studentProfilePic, date_time)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (teacherEmail, className, subject, boardOrUniversity, studentEmail, teacherName, teacherProfilePic, studentName, studentProfilePic, date_time)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
         
         await client.execute(broadcastQuery, [
           booking.teacherEmail,
           booking.className || '',
           booking.subject,
+          booking.boardOrUniversity || '',
           booking.studentEmail,
           userName,
           '', // teacher profile pic - will be fetched if needed
@@ -637,22 +566,26 @@ router.put('/respond', verifyToken, async (req, res) => {
       }
     }
 
-    // Notify student via WebSocket
-    try {
-      const io = getIO();
-      io.to(`user:${booking.studentEmail}`).emit('booking_status_update', {
-        bookingId: bookingId,
-        teacherEmail: userEmail,
-        teacherName: userName,
-        status: status,
-        message: booking.teacherResponse,
-        timestamp: booking.updatedAt,
-        subject: booking.subject,
-        className: booking.className
-      });
-      console.log(`✅ Real-time status update sent to student: ${booking.studentEmail}`);
-    } catch (socketError) {
-      console.error('Socket notification failed:', socketError);
+    // Notify student via WebSocket only if status actually changed
+    if (previousStatus !== status) {
+      try {
+        const io = getIO();
+        io.to(`user:${booking.studentEmail}`).emit('booking_status_update', {
+          bookingId: bookingId,
+          teacherEmail: userEmail,
+          teacherName: userName,
+          status: status,
+          message: booking.teacherResponse,
+          timestamp: booking.updatedAt,
+          subject: booking.subject,
+          className: booking.className
+        });
+        console.log(`✅ Real-time status update sent to student: ${booking.studentEmail}`);
+      } catch (socketError) {
+        console.error('Socket notification failed:', socketError);
+      }
+    } else {
+      console.log(`⚠️ Booking ${bookingId} status unchanged (${status}), skipping socket emission`);
     }
 
     res.json({
@@ -704,11 +637,12 @@ router.get('/status/:bookingId', verifyToken, async (req, res) => {
   }
 });
 
-// DELETE /api/bookings/:bookingId - Cancel a booking request (student only)
+// DELETE /api/bookings/:bookingId - Cancel a booking request (student) or reject/delete (teacher)
 router.delete('/:bookingId', verifyToken, async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const studentEmail = req.user.email;
+    const userEmail = req.user.email;
+    const userRole = req.user.role;
 
     const booking = bookingRequests.get(bookingId);
     if (!booking) {
@@ -718,46 +652,77 @@ router.delete('/:bookingId', verifyToken, async (req, res) => {
       });
     }
 
-    // Verify the student owns this request
-    if (booking.studentEmail !== studentEmail) {
+    const isStudent = booking.studentEmail === userEmail;
+    const isTeacher = booking.teacherEmail === userEmail;
+
+    // Verify the user is authorized (student or teacher for this booking)
+    if (!isStudent && !isTeacher) {
       return res.status(403).json({
         success: false,
-        message: 'Not authorized to cancel this request'
+        message: 'Not authorized to delete this request'
       });
     }
 
-    // Only allow cancellation of pending requests
-    if (booking.status !== 'pending') {
+    // Student can only cancel pending requests
+    if (isStudent && booking.status !== 'pending') {
       return res.status(400).json({
         success: false,
         message: `Cannot cancel a ${booking.status} request`
       });
     }
 
-    booking.status = 'cancelled';
-    booking.updatedAt = new Date().toISOString();
+    // Teacher can delete any pending request (this is a rejection)
+    if (isTeacher && booking.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete a ${booking.status} request`
+      });
+    }
 
-    // Notify teacher
+    // Remove from in-memory cache
+    bookingRequests.delete(bookingId);
+
+    // Delete from Cassandra database
+    try {
+      const deleteQuery = `DELETE FROM booking_requests WHERE id = ?`;
+      await client.execute(deleteQuery, [bookingId], { prepare: true });
+      console.log('✅ Booking request deleted from Cassandra:', bookingId);
+    } catch (dbError) {
+      console.error('❌ Error deleting booking from Cassandra:', dbError);
+      // Don't fail the request if DB delete fails, in-memory still works
+    }
+
+    // Notify the other party via WebSocket
     try {
       const io = getIO();
-      io.to(`user:${booking.teacherEmail}`).emit('booking_cancelled', {
-        bookingId: bookingId,
-        studentEmail: studentEmail,
-        message: 'Student cancelled the request'
-      });
+      if (isStudent) {
+        // Notify teacher that student cancelled
+        io.to(`user:${booking.teacherEmail}`).emit('booking_cancelled', {
+          bookingId: bookingId,
+          studentEmail: userEmail,
+          message: 'Student cancelled the request'
+        });
+      } else {
+        // Notify student that teacher rejected (deleted) the request
+        io.to(`user:${booking.studentEmail}`).emit('booking_deleted', {
+          bookingId: bookingId,
+          teacherEmail: userEmail,
+          message: 'Teacher declined the request'
+        });
+      }
     } catch (socketError) {
       console.error('Socket notification failed:', socketError);
     }
 
     res.json({
       success: true,
-      message: 'Booking request cancelled'
+      message: isStudent ? 'Booking request cancelled' : 'Booking request declined'
     });
   } catch (error) {
-    console.error('Error cancelling booking:', error);
+    console.error('Error deleting booking:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to cancel booking'
+      message: 'Failed to delete booking'
     });
   }
 });

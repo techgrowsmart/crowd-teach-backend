@@ -3,7 +3,7 @@
  * Handles individual chat and broadcast messaging for teachers and students
  */
 
-const { getIO, getConnectedUsers } = require('../socket');
+const { getIO, getConnectedUsers, connectedUsers } = require('../socket');
 const client = require('../config/db');
 const { v1: uuidv1 } = require('uuid');
 
@@ -15,6 +15,13 @@ const typingUsers = new Map(); // chatId -> Set of typing users
 // OPTIMIZATION: In-memory message cache for instant delivery
 const messageCache = new Map(); // chatId -> messages array
 const CACHE_SIZE_LIMIT = 1000; // Limit cache size
+
+// Performance metrics tracking
+const performanceMetrics = {
+  messageDeliveryTimes: [],
+  cacheHitCount: 0,
+  cacheMissCount: 0
+};
 
 // Performance monitoring function
 function trackMessageDelivery(startTime, messageId, senderEmail, recipientEmail) {
@@ -80,17 +87,27 @@ function initChatSocket(socket, email, role) {
   // Join a chat room - OPTIMIZED
   socket.on('join_chat', async (data) => {
     try {
-      const { contactEmail } = data;
+      const { contactEmail, subject, class_name, boardOrUniversity, contactTitle } = data;
       if (!contactEmail) {
         socket.emit('chat_error', { error: 'Contact email required' });
         return;
       }
 
-      // Create consistent chat ID
-      const chatId = [email, contactEmail].sort().join('_');
+      // Create context-aware chat ID to support subject-specific conversations
+      // Prefer the full contactTitle (matches /send and /:contactEmail routes)
+      const contextParts = [email, contactEmail];
+      if (contactTitle) {
+        contextParts.push(contactTitle.toLowerCase().trim().replace(/\s+/g, '_'));
+      } else {
+        if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+        if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+        if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      }
+      
+      const chatId = contextParts.sort().join('_');
       socket.join(`chat:${chatId}`);
       
-      console.log(`👥 ${email} joined chat room: ${chatId}`);
+      console.log(`👥 ${email} joined chat room: ${chatId} with context:`, { subject, class_name, boardOrUniversity });
       
       // OPTIMIZATION: Check cache first for instant chat history
       let chatHistory = messageCache.get(chatId);
@@ -102,12 +119,15 @@ function initChatSocket(socket, email, role) {
           chatId,
           contactEmail,
           messages: chatHistory,
-          fromCache: true
+          fromCache: true,
+          subject: subject || null,
+          className: class_name || null,
+          boardOrUniversity: boardOrUniversity || null
         });
       } else {
         performanceMetrics.cacheMissCount++;
         // Fetch from database if not in cache
-        chatHistory = await getChatHistory(chatId, email, contactEmail);
+        chatHistory = await getChatHistory(chatId, email, contactEmail, subject, class_name, boardOrUniversity);
         
         // Cache the results for future instant access
         if (chatHistory.length > 0) {
@@ -123,7 +143,10 @@ function initChatSocket(socket, email, role) {
           chatId,
           contactEmail,
           messages: chatHistory,
-          fromCache: false
+          fromCache: false,
+          subject: subject || null,
+          className: class_name || null,
+          boardOrUniversity: boardOrUniversity || null
         });
       }
     } catch (error) {
@@ -134,9 +157,15 @@ function initChatSocket(socket, email, role) {
 
   // Leave a chat room
   socket.on('leave_chat', (data) => {
-    const { contactEmail } = data;
+    const { contactEmail, subject, class_name, boardOrUniversity } = data;
     if (contactEmail) {
-      const chatId = [email, contactEmail].sort().join('_');
+      // Create context-aware chat ID
+      const contextParts = [email, contactEmail];
+      if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+      if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+      if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      
+      const chatId = contextParts.sort().join('_');
       socket.leave(`chat:${chatId}`);
       console.log(`👋 ${email} left chat room: ${chatId}`);
     }
@@ -147,14 +176,26 @@ function initChatSocket(socket, email, role) {
     const startTime = process.hrtime.bigint();
     
     try {
-      const { recipientEmail, text, senderName, encrypted, publicKey, messageHash } = data;
+      const { recipientEmail, text, senderName, encrypted, publicKey, messageHash, subject, class_name, boardOrUniversity, contactTitle } = data;
       
       if (!recipientEmail || !text) {
         socket.emit('message_error', { error: 'Recipient and text required' });
         return;
       }
 
-      const chatId = [email, recipientEmail].sort().join('_');
+      // Create context-aware chat ID to support subject-specific conversations.
+      // Prefer contactTitle (full tuition title) as it uniquely captures details
+      // that subject/class/board alone don't (e.g. university year).
+      const contextParts = [email, recipientEmail];
+      if (contactTitle) {
+        contextParts.push(contactTitle.toLowerCase().trim().replace(/\s+/g, '_'));
+      } else {
+        if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+        if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+        if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      }
+      
+      const chatId = contextParts.sort().join('_');
       const messageId = uuidv1();
       const timestamp = new Date();
 
@@ -171,7 +212,11 @@ function initChatSocket(socket, email, role) {
         deliveredAt: Date.now(),
         encrypted: encrypted === true,
         publicKey: publicKey || null,
-        messageHash: messageHash || null
+        messageHash: messageHash || null,
+        subject: subject || null,
+        className: class_name || null,
+        boardOrUniversity: boardOrUniversity || null,
+        contactTitle: contactTitle || null
       };
 
       const io = getIO();
@@ -198,8 +243,8 @@ function initChatSocket(socket, email, role) {
         try {
           const query = `
             INSERT INTO messages 
-            (id, sender_email, recipient_email, text, timestamp, is_read, chat_id, created_at, sender_name, recipient_name, encrypted, public_key, message_hash) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, sender_email, recipient_email, text, timestamp, is_read, chat_id, created_at, sender_name, recipient_name, encrypted, public_key, message_hash, subject, class_name, board_or_university, title) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `;
           await client.execute(query, [
             messageId,
@@ -214,7 +259,11 @@ function initChatSocket(socket, email, role) {
             recipientEmail,
             encrypted === true,
             publicKey || null,
-            messageHash || null
+            messageHash || null,
+            subject || null,
+            class_name || null,
+            boardOrUniversity || null,
+            contactTitle || null
           ], { prepare: true });
           
           const dbTime = process.hrtime.bigint();
@@ -226,7 +275,91 @@ function initChatSocket(socket, email, role) {
         }
       });
 
-      // OPTIMIZATION 3: Update cache immediately after message delivery
+      // OPTIMIZATION 3: Save contact record when a message is actually sent.
+      // This is the ONLY point where contacts are created; no booking/status event creates a contact.
+      setImmediate(async () => {
+        try {
+          let teacherEmail, studentEmail;
+          const senderRoleResult = await client.execute(
+            'SELECT role FROM users WHERE email = ? LIMIT 1',
+            [email],
+            { prepare: true }
+          );
+          const senderIsStudent = senderRoleResult.rows && senderRoleResult.rows.length > 0 &&
+                                  senderRoleResult.rows[0].role === 'student';
+          if (senderIsStudent) {
+            teacherEmail = recipientEmail;
+            studentEmail = email;
+          } else {
+            teacherEmail = email;
+            studentEmail = recipientEmail;
+          }
+
+          const existingContactQuery = contactTitle
+            ? `SELECT * FROM contacts WHERE teacher_email = ? AND student_email = ? AND title = ? ALLOW FILTERING LIMIT 1`
+            : `SELECT * FROM contacts WHERE teacher_email = ? AND student_email = ? AND subject = ? AND class_name = ? AND board_or_university = ? ALLOW FILTERING LIMIT 1`;
+          const existingParams = contactTitle
+            ? [teacherEmail, studentEmail, contactTitle]
+            : [teacherEmail, studentEmail, subject || null, class_name || null, boardOrUniversity || null];
+          const existing = await client.execute(existingContactQuery, existingParams, { prepare: true });
+
+          if (!existing.rows || existing.rows.length === 0) {
+            const teacherResult = await client.execute(
+              'SELECT name, profileimage FROM users WHERE email = ? LIMIT 1',
+              [teacherEmail],
+              { prepare: true }
+            );
+            const studentResult = await client.execute(
+              'SELECT name, profileimage FROM users WHERE email = ? LIMIT 1',
+              [studentEmail],
+              { prepare: true }
+            );
+
+            const teacherName = teacherResult.rows?.[0]?.name || teacherEmail.split('@')[0];
+            const teacherProfilePic = teacherResult.rows?.[0]?.profileimage || null;
+            const studentName = studentResult.rows?.[0]?.name || studentEmail.split('@')[0];
+            const studentProfilePic = studentResult.rows?.[0]?.profileimage || null;
+
+            const titlePart = contactTitle ? contactTitle.replace(/[^a-zA-Z0-9]/g, '_') : null;
+            const subjectPart = (subject || 'General').replace(/[^a-zA-Z0-9]/g, '_');
+            const classPart = (class_name || 'General').replace(/[^a-zA-Z0-9]/g, '_');
+            const boardPart = (boardOrUniversity || '').replace(/[^a-zA-Z0-9]/g, '_');
+            const contactId = titlePart
+              ? `contact_${teacherEmail}_${studentEmail}_${titlePart}`
+              : `contact_${teacherEmail}_${studentEmail}_${subjectPart}_${classPart}_${boardPart}`;
+
+            const insertQuery = `
+              INSERT INTO contacts (
+                id, teacher_email, student_email, teacher_name, student_name,
+                teacher_profile_pic, student_profile_pic, subject, class_name, board_or_university, title, status, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+            await client.execute(insertQuery, [
+              contactId,
+              teacherEmail,
+              studentEmail,
+              teacherName,
+              studentName,
+              teacherProfilePic,
+              studentProfilePic,
+              subject || null,
+              class_name || null,
+              boardOrUniversity || null,
+              contactTitle || null,
+              'accepted',
+              new Date(),
+              new Date()
+            ], { prepare: true });
+
+            console.log('✅ Socket contact saved:', contactId, 'title:', contactTitle || subject || 'General');
+          }
+        } catch (contactError) {
+          console.warn('⚠️ Socket contact save failed (non-critical):', contactError.message);
+          // Don’t fail the message if contact creation fails
+        }
+      });
+
+      // OPTIMIZATION 4: Update cache immediately after message delivery
       setImmediate(() => {
         if (!messageCache.has(chatId)) {
           messageCache.set(chatId, []);
@@ -249,9 +382,15 @@ function initChatSocket(socket, email, role) {
 
   // Mark messages as read
   socket.on('mark_as_read', async (data) => {
-    const { contactEmail } = data;
+    const { contactEmail, subject, class_name, boardOrUniversity } = data;
     if (contactEmail) {
-      const chatId = [email, contactEmail].sort().join('_');
+      // Create context-aware chat ID
+      const contextParts = [email, contactEmail];
+      if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+      if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+      if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      
+      const chatId = contextParts.sort().join('_');
       const io = getIO();
       io.to(`user:${contactEmail}`).emit('messages_read', {
         chatId,
@@ -262,9 +401,15 @@ function initChatSocket(socket, email, role) {
 
   // Typing indicators
   socket.on('typing', (data) => {
-    const { recipientEmail } = data;
+    const { recipientEmail, subject, class_name, boardOrUniversity } = data;
     if (recipientEmail) {
-      const chatId = [email, recipientEmail].sort().join('_');
+      // Create context-aware chat ID
+      const contextParts = [email, recipientEmail];
+      if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+      if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+      if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      
+      const chatId = contextParts.sort().join('_');
       const io = getIO();
       io.to(`user:${recipientEmail}`).emit('typing', {
         from: email,
@@ -275,9 +420,15 @@ function initChatSocket(socket, email, role) {
   });
 
   socket.on('stop_typing', (data) => {
-    const { recipientEmail } = data;
+    const { recipientEmail, subject, class_name, boardOrUniversity } = data;
     if (recipientEmail) {
-      const chatId = [email, recipientEmail].sort().join('_');
+      // Create context-aware chat ID
+      const contextParts = [email, recipientEmail];
+      if (subject) contextParts.push(subject.toLowerCase().replace(/\s+/g, '_'));
+      if (class_name) contextParts.push(class_name.toLowerCase().replace(/\s+/g, '_'));
+      if (boardOrUniversity) contextParts.push(boardOrUniversity.toLowerCase().replace(/\s+/g, '_'));
+      
+      const chatId = contextParts.sort().join('_');
       const io = getIO();
       io.to(`user:${recipientEmail}`).emit('stop_typing', {
         from: email,
@@ -520,16 +671,17 @@ function initChatSocket(socket, email, role) {
 // ============ HELPER FUNCTIONS ============
 
 /**
- * Get chat history between two users
+ * Get chat history between two users with optional subject context
  */
-async function getChatHistory(chatId, userEmail, contactEmail) {
+async function getChatHistory(chatId, userEmail, contactEmail, subject = null, class_name = null, boardOrUniversity = null) {
   try {
     // Query the new messages table for individual chat messages
+    // The chatId already includes subject context if provided
     const query = `
-      SELECT id, sender_email, recipient_email, text, created_at, is_read, encrypted, public_key, message_hash
+      SELECT id, sender_email, recipient_email, text, created_at, is_read, encrypted, public_key, message_hash, subject, class_name, board_or_university
       FROM messages 
       WHERE chat_id = ? 
-      ORDER BY created_at ASC
+      ORDER BY id ASC
       ALLOW FILTERING
     `;
     
@@ -551,7 +703,10 @@ async function getChatHistory(chatId, userEmail, contactEmail) {
         isMe: row.sender_email === userEmail,
         encrypted: row.encrypted || false,
         publicKey: row.public_key || null,
-        messageHash: row.message_hash || null
+        messageHash: row.message_hash || null,
+        subject: row.subject || null,
+        className: row.class_name || null,
+        boardOrUniversity: row.board_or_university || null
       }));
   } catch (error) {
     console.error('❌ Error fetching chat history:', error);

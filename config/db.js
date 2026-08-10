@@ -61,7 +61,7 @@ setTimeout(() => init().catch(err => console.error('⚠️ Cassandra initializat
 // Create messages table after connection is established
 async function createMessagesTable() {
     try {
-        console.log('🔧 Creating messages table...');
+        console.log('🔧 Creating messages table with context support...');
         
         const query = `
             CREATE TABLE IF NOT EXISTS messages (
@@ -78,31 +78,24 @@ async function createMessagesTable() {
                 encrypted BOOLEAN,
                 public_key TEXT,
                 message_hash TEXT,
+                subject TEXT,
+                class_name TEXT,
+                board_or_university TEXT,
+                title TEXT,
                 PRIMARY KEY (chat_id, id)
             ) WITH CLUSTERING ORDER BY (id DESC)
         `;
         
         await client.execute(query);
-        console.log('✅ Messages table created successfully');
-        
-        // Add encryption columns for existing deployments (idempotent)
-        const alterColumns = [
-            'ALTER TABLE messages ADD encrypted BOOLEAN',
-            'ALTER TABLE messages ADD public_key TEXT',
-            'ALTER TABLE messages ADD message_hash TEXT'
-        ];
-        
-        for (const alterQuery of alterColumns) {
-            try {
-                await client.execute(alterQuery);
-            } catch (alterError) {
-                // Ignore "already exists" errors (Cassandra error code 2200)
-                if (alterError.code !== 2200 && !alterError.message?.includes('already exists')) {
-                    console.warn('⚠️ Could not add column:', alterError.message);
-                }
-            }
+        console.log('✅ Messages table created successfully with context columns');
+
+        // Ensure the title column exists on already-created tables (no-op if it already exists)
+        try {
+            await client.execute(`ALTER TABLE messages ADD title TEXT`);
+            console.log('✅ Added title column to messages table');
+        } catch (alterError) {
+            // Column likely already exists - safe to ignore
         }
-        console.log('✅ Encryption columns ensured');
         
     } catch (error) {
         console.error('❌ Error creating messages table:', error);

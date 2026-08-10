@@ -14,6 +14,10 @@ function initSocket(server) {
         // Local development
         'http://localhost:8081', 'http://localhost:3000', 'http://localhost:19006',
         'http://localhost:8080', 'http://127.0.0.1:8081', 'http://127.0.0.1:3000',
+        // Local network IP for Expo dev server
+        'http://192.168.29.35:8081', 'http://192.168.29.35:19006',
+        // Allow any local network IP (dynamic across machines)
+        /^http:\/\/192\.168\.\d+\.\d+:\d+$/, /^http:\/\/10\.\d+\.\d+:\d+$/,
         // Production domains
         'https://portal.gogrowsmart.com',
         'https://gogrowsmart.com',
@@ -141,9 +145,10 @@ function initSocket(server) {
         className
       };
 
-      // Notify student immediately
-      io.to(`user:${studentEmail}`).emit('booking_status_update', response);
-      
+      // Notify student via HTTP route (PUT /api/bookings/respond) which is the
+      // single source of truth for emitting booking_status_update. The HTTP route
+      // only emits when the status actually transitions, preventing duplicate alerts.
+
       // If status is accepted or subscribed, make chat available and update broadcast groups
       if (status === 'accepted' || status === 'subscribed') {
         // Trigger chat availability for the student immediately on accept
@@ -430,6 +435,7 @@ module.exports = {
   initSocket,
   getIO,
   getConnectedUsers,
+  connectedUsers,
   isUserOnline,
   notifyUser,
   broadcastToTeachers,

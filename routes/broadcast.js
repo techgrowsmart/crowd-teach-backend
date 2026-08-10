@@ -217,7 +217,7 @@ router.get("/subject-details/:subject/:className", verifyToken, async (req, res)
             SELECT id, text, timestamp, time, studentEmails
             FROM broadcast_messages_table 
             WHERE teacherEmail = ? AND subject = ? AND className = ?
-            ORDER BY timestamp DESC
+            ORDER BY id DESC
             LIMIT 10
         `;
         
@@ -271,37 +271,52 @@ router.get("/groups", verifyToken, async (req, res) => {
             ALLOW FILTERING
         `;
         const acceptedResult = await client.execute(acceptedQuery, [teacherEmail], { prepare: true });
+        
+        // OPTIMIZATION: Batch fetch profile pictures for all participants
         const participantEmails = new Set([
             ...(subscribedResult.rows || []).map(row => row.student_email),
             ...(acceptedResult.rows || []).map(row => row.student_email)
         ].filter(Boolean));
         const profilePics = new Map();
 
-        await Promise.all(Array.from(participantEmails).map(async (email) => {
+        if (participantEmails.size > 0) {
+            const participantEmailsArray = Array.from(participantEmails);
+            
+            // Try users table first with batch query
             try {
-                const userResult = await client.execute(
-                    'SELECT profileimage FROM users WHERE email = ? LIMIT 1',
-                    [email],
-                    { prepare: true }
-                );
-                const profilePic = userResult.rows?.[0]?.profileimage;
-                if (profilePic) {
-                    profilePics.set(email, profilePic);
-                    return;
-                }
-
-                const studentResult = await client.execute(
-                    'SELECT profileimage FROM student WHERE email = ? LIMIT 1',
-                    [email],
-                    { prepare: true }
-                );
-                if (studentResult.rows?.[0]?.profileimage) {
-                    profilePics.set(email, studentResult.rows[0].profileimage);
+                const usersQuery = `
+                    SELECT email, profileimage FROM users 
+                    WHERE email IN ?
+                `;
+                const usersResult = await client.execute(usersQuery, [participantEmailsArray], { prepare: true });
+                for (const user of usersResult.rows || []) {
+                    if (user.profileimage) {
+                        profilePics.set(user.email, user.profileimage);
+                    }
                 }
             } catch (error) {
-                console.warn(`⚠️ Could not fetch current profile picture for ${email}:`, error.message);
+                console.warn('Error fetching profile pictures from users table:', error.message);
             }
-        }));
+            
+            // Try student table for missing profiles with batch query
+            const missingEmails = participantEmailsArray.filter(email => !profilePics.has(email));
+            if (missingEmails.length > 0) {
+                try {
+                    const studentQuery = `
+                        SELECT email, profileimage FROM student 
+                        WHERE email IN ?
+                    `;
+                    const studentResult = await client.execute(studentQuery, [missingEmails], { prepare: true });
+                    for (const student of studentResult.rows || []) {
+                        if (student.profileimage) {
+                            profilePics.set(student.email, student.profileimage);
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Error fetching profile pictures from student table:', error.message);
+                }
+            }
+        }
         
         for (const row of subscribedResult.rows || []) {
             const subject = row.subject || 'General';
@@ -469,17 +484,145 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
             });
         }
         
-        // Get teacher details for each subscription
+        // OPTIMIZATION: Batch fetch all teacher profiles in a single query
+        const teacherEmails = [...new Set(result.rows.map(row => row.teacher_email))];
+        const teacherProfiles = new Map();
+        
+        if (teacherEmails.length > 0) {
+            const teacherQuery = `
+                SELECT email, name, profilepic FROM teachers1 
+                WHERE email IN ?
+            `;
+            const teacherResult = await client.execute(teacherQuery, [teacherEmails], { prepare: true });
+            for (const teacher of teacherResult.rows || []) {
+                teacherProfiles.set(teacher.email, teacher);
+            }
+        }
+        
+        // OPTIMIZATION: Batch fetch all broadcast messages for all subscriptions
+        const broadcastKeys = [];
+        for (const row of result.rows) {
+            const classNameCandidates = [row.class_name, '', 'All Classes'].filter(cn => cn !== null && cn !== undefined);
+            for (const cn of classNameCandidates) {
+                broadcastKeys.push({ teacherEmail: row.teacher_email, subject: row.subject, className: cn });
+            }
+        }
+        
+        const broadcastMessages = new Map();
+        if (broadcastKeys.length > 0) {
+            // Fetch all broadcasts in parallel using Promise.all for faster execution
+            const broadcastPromises = broadcastKeys.map(async (key) => {
+                try {
+                    const broadcastQuery = `
+                        SELECT id, text, timestamp, teacherName, teacherEmail, subject, className
+                        FROM broadcast_messages_table 
+                        WHERE teacherEmail = ? AND subject = ? AND className = ?
+                        LIMIT 10
+                    `;
+                    const result = await client.execute(broadcastQuery, [key.teacherEmail, key.subject, key.className], { prepare: true });
+                    return { key, messages: result.rows || [] };
+                } catch (error) {
+                    return { key, messages: [] };
+                }
+            });
+            
+            const broadcastResults = await Promise.all(broadcastPromises);
+            
+            // Group broadcasts by teacher-subject combination
+            for (const { key, messages } of broadcastResults) {
+                if (messages.length > 0) {
+                    const groupKey = `${key.teacherEmail}_${key.subject}`;
+                    if (!broadcastMessages.has(groupKey)) {
+                        broadcastMessages.set(groupKey, []);
+                    }
+                    broadcastMessages.get(groupKey).push(...messages);
+                }
+            }
+        }
+        
+        // OPTIMIZATION: Batch fetch all participants for all teacher-subject combinations
+        const participantKeys = [...new Set(result.rows.map(row => `${row.teacher_email}_${row.subject}`))];
+        const allParticipants = new Map();
+        
+        if (participantKeys.length > 0) {
+            const participantPromises = participantKeys.map(async (key) => {
+                const [teacherEmail, subject] = key.split('_');
+                try {
+                    const participantQuery = `
+                        SELECT student_email, student_name, student_info, created_at, status, teacher_email, subject, class_name
+                        FROM booking_requests
+                        WHERE teacher_email = ? AND subject = ? AND status IN ('subscribed', 'accepted')
+                        ALLOW FILTERING
+                    `;
+                    const result = await client.execute(participantQuery, [teacherEmail, subject], { prepare: true });
+                    return { key, participants: result.rows || [] };
+                } catch (error) {
+                    return { key, participants: [] };
+                }
+            });
+            
+            const participantResults = await Promise.all(participantPromises);
+            
+            for (const { key, participants } of participantResults) {
+                allParticipants.set(key, participants);
+            }
+        }
+        
+        // OPTIMIZATION: Batch fetch all profile pictures for all participants
+        const allParticipantEmails = new Set();
+        for (const participants of allParticipants.values()) {
+            for (const participant of participants) {
+                if (participant.student_email) {
+                    allParticipantEmails.add(participant.student_email);
+                }
+            }
+        }
+        
+        const profilePictures = new Map();
+        if (allParticipantEmails.size > 0) {
+            const participantEmailsArray = Array.from(allParticipantEmails);
+            
+            // Try users table first
+            try {
+                const usersQuery = `
+                    SELECT email, profileimage FROM users 
+                    WHERE email IN ?
+                `;
+                const usersResult = await client.execute(usersQuery, [participantEmailsArray], { prepare: true });
+                for (const user of usersResult.rows || []) {
+                    if (user.profileimage) {
+                        profilePictures.set(user.email, user.profileimage);
+                    }
+                }
+            } catch (error) {
+                console.warn('Error fetching profile pictures from users table:', error.message);
+            }
+            
+            // Try student table for missing profiles
+            const missingEmails = participantEmailsArray.filter(email => !profilePictures.has(email));
+            if (missingEmails.length > 0) {
+                try {
+                    const studentQuery = `
+                        SELECT email, profileimage FROM student 
+                        WHERE email IN ?
+                    `;
+                    const studentResult = await client.execute(studentQuery, [missingEmails], { prepare: true });
+                    for (const student of studentResult.rows || []) {
+                        if (student.profileimage) {
+                            profilePictures.set(student.email, student.profileimage);
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Error fetching profile pictures from student table:', error.message);
+                }
+            }
+        }
+        
+        // Build subscriptions with all batch-fetched data
         const subscriptions = [];
         
         for (const row of result.rows) {
-            const teacherQuery = `
-                SELECT name, profilepic FROM teachers1 
-                WHERE email = ? 
-                LIMIT 1
-            `;
-            const teacherResult = await client.execute(teacherQuery, [row.teacher_email], { prepare: true });
-            const teacher = teacherResult.rows?.[0];
+            const teacher = teacherProfiles.get(row.teacher_email);
             
             // Parse student_info from JSON string if needed
             let studentInfo = {};
@@ -493,33 +636,9 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
                 console.warn('Failed to parse student_info:', e);
             }
             
-            // Get recent broadcasts for this group (fetch and sort in JS since Cassandra doesn't support ORDER BY on non-clustering columns)
-            // For skills subjects, className might vary - check multiple variations
-            const classNameCandidates = [row.class_name, '', 'All Classes'].filter(cn => cn !== null && cn !== undefined);
-            let broadcastResult = null;
-            
-            for (const cn of classNameCandidates) {
-                const broadcastQuery = `
-                    SELECT id, text, timestamp, teacherName
-                    FROM broadcast_messages_table 
-                    WHERE teacherEmail = ? AND subject = ? AND className = ?
-                    LIMIT 10
-                `;
-                
-                const result = await client.execute(broadcastQuery, [
-                    row.teacher_email, 
-                    row.subject, 
-                    cn
-                ], { prepare: true });
-                
-                if (result.rows && result.rows.length > 0) {
-                    broadcastResult = result;
-                    break;
-                }
-            }
-            
-            // Sort by timestamp in JavaScript to get the most recent
-            const broadcasts = (broadcastResult && broadcastResult.rows) ? broadcastResult.rows : [];
+            // Get recent broadcasts from batch-fetched data
+            const groupKey = `${row.teacher_email}_${row.subject}`;
+            const broadcasts = broadcastMessages.get(groupKey) || [];
             const sortedBroadcasts = broadcasts.sort((a, b) => {
                 const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
                 const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -529,67 +648,53 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
             
             const normalizedClassName = normalizeClassName(row.class_name);
 
-            // Share the participant summary for this group with subscribed students.
-            // Only the group-level name, email, profile picture, and status are exposed.
+            // Get participants from batch-fetched data
+            const participants = allParticipants.get(groupKey) || [];
             const participantRows = new Map();
-            const participantClassNames = [row.class_name, normalizedClassName, '', 'All Classes']
-                .filter((className, index, candidates) => className !== null && className !== undefined && candidates.indexOf(className) === index);
-
-            for (const participantClassName of participantClassNames) {
-                const participantResult = await client.execute(`
-                    SELECT student_email, student_name, student_info, created_at, status
-                    FROM booking_requests
-                    WHERE teacher_email = ? AND subject = ? AND class_name = ?
-                    ALLOW FILTERING
-                `, [row.teacher_email, row.subject, participantClassName], { prepare: true });
-
-                for (const participant of participantResult.rows || []) {
-                    if (!participant.student_email || !['subscribed', 'accepted'].includes(participant.status)) continue;
-                    if (!participantRows.has(participant.student_email)) {
-                        let participantInfo = {};
-                        try {
-                            participantInfo = participant.student_info
-                                ? (typeof participant.student_info === 'string' ? JSON.parse(participant.student_info) : participant.student_info)
-                                : {};
-                        } catch (error) {
-                            participantInfo = {};
-                        }
-
-                        let profilePic = participantInfo.profilePic || participantInfo.profileImage || participantInfo.profileimage || participantInfo.profilepic || null;
-                        try {
-                            const userResult = await client.execute(
-                                'SELECT profileimage FROM users WHERE email = ? LIMIT 1',
-                                [participant.student_email],
-                                { prepare: true }
-                            );
-                            profilePic = userResult.rows?.[0]?.profileimage || profilePic;
-
-                            if (!profilePic) {
-                                const studentResult = await client.execute(
-                                    'SELECT profileimage FROM student WHERE email = ? LIMIT 1',
-                                    [participant.student_email],
-                                    { prepare: true }
-                                );
-                                profilePic = studentResult.rows?.[0]?.profileimage || profilePic;
-                            }
-                        } catch (error) {
-                            console.warn(`Could not fetch current profile picture for ${participant.student_email}:`, error.message);
-                        }
-
-                        participantRows.set(participant.student_email, {
-                            email: participant.student_email,
-                            name: participant.student_name || participant.student_email,
-                            profilePic,
-                            joinedAt: participant.created_at,
-                            status: participant.status
-                        });
+            
+            for (const participant of participants) {
+                if (!participant.student_email) continue;
+                
+                // Filter by class name variations
+                const participantClassName = normalizeClassName(participant.class_name);
+                const classNameMatches = participantClassName === normalizedClassName || 
+                                       participant.class_name === row.class_name ||
+                                       participant.class_name === '' ||
+                                       participant.class_name === 'All Classes';
+                
+                if (!classNameMatches) continue;
+                
+                if (!participantRows.has(participant.student_email)) {
+                    let participantInfo = {};
+                    try {
+                        participantInfo = participant.student_info
+                            ? (typeof participant.student_info === 'string' ? JSON.parse(participant.student_info) : participant.student_info)
+                            : {};
+                    } catch (error) {
+                        participantInfo = {};
                     }
+
+                    // Use batch-fetched profile picture
+                    let profilePic = profilePictures.get(participant.student_email) || 
+                                     participantInfo.profilePic || 
+                                     participantInfo.profileImage || 
+                                     participantInfo.profileimage || 
+                                     participantInfo.profilepic || null;
+
+                    participantRows.set(participant.student_email, {
+                        email: participant.student_email,
+                        name: participant.student_name || participant.student_email,
+                        profilePic,
+                        joinedAt: participant.created_at,
+                        status: participant.status
+                    });
                 }
             }
 
             const participantList = Array.from(participantRows.values());
             const students = participantList.filter((participant) => participant.status === 'subscribed');
             const pendingStudents = participantList.filter((participant) => participant.status === 'accepted');
+            
             subscriptions.push({
                 groupId: `group_${row.teacher_email}_${row.subject}_${normalizedClassName}`,
                 teacherEmail: row.teacher_email,
@@ -607,13 +712,6 @@ router.get("/student-subscriptions", verifyToken, async (req, res) => {
                     timestamp: lastBroadcast.timestamp,
                     teacherName: lastBroadcast.teachername
                 } : null
-            });
-            
-            console.log('📢 Student subscription:', {
-                groupId: `group_${row.teacher_email}_${row.subject}_${normalizedClassName}`,
-                subject: row.subject,
-                className: normalizedClassName,
-                originalClassName: row.class_name
             });
         }
         
