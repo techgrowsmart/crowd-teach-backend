@@ -276,6 +276,10 @@ app.use("/api/userProfile", userProfileRoutes);
 const teacherReviewsRoutes = require("./routes/teacher-reviews");
 app.use("/api", teacherReviewsRoutes);
 
+// Landing page reviews routes
+const landingReviewsRoutes = require("./routes/landing-reviews");
+app.use("/api", landingReviewsRoutes);
+
 const enrollmentDataRoutes = require("./routes/enrollment-data");
 app.use("/api", enrollmentDataRoutes);
 
