@@ -63,23 +63,44 @@ router.post('/verify-payment-spotlight', verifyToken, async (req, res) => {
       rawSpotlightType.includes('skill') ? 'skill' :
       rawSpotlightType.includes('subject') ? 'subject' : 'both';
 
-    // Check if teacher already has the other spotlight type purchased
-    const existingInvoicesQuery = `SELECT description FROM teacher_invoices WHERE teacher_email = ? AND status = 'paid' ALLOW FILTERING`;
-    const existingInvoicesResult = await client.execute(existingInvoicesQuery, [email], { prepare: true });
-    
-    let finalSpotlightType = normalizedSpotlightType;
-    if (existingInvoicesResult.rowLength > 0) {
-        const descriptions = existingInvoicesResult.rows.map(row => row.description || '').join(' ').toLowerCase();
-        const hasSkill = descriptions.includes('skill');
-        const hasSubject = descriptions.includes('subject');
-        
-        // If purchasing skill and already has subject, or vice versa, set to Both
-        if (normalizedSpotlightType === 'skill' && hasSubject) {
-            finalSpotlightType = 'both';
-        } else if (normalizedSpotlightType === 'subject' && hasSkill) {
-            finalSpotlightType = 'both';
+    // Check active spotlight purchases per state; combine to 'both' only within the same state
+    const statesToInsert = state ? (Array.isArray(state) ? state : [state]) : [];
+    const stateToTypes = new Map();
+    const now = new Date();
+    if (statesToInsert.length > 0) {
+        try {
+            const existingQuery = `SELECT state, spotlight_type, expiry FROM spotlight_states WHERE teacher_email = ?`;
+            const existingResult = await client.execute(existingQuery, [email], { prepare: true });
+            for (const row of existingResult.rows) {
+                if (row.expiry && new Date(row.expiry) > now) {
+                    if (!stateToTypes.has(row.state)) {
+                        stateToTypes.set(row.state, new Set());
+                    }
+                    stateToTypes.get(row.state).add(String(row.spotlight_type).toLowerCase());
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ Could not fetch existing spotlight states:', e.message);
         }
     }
+
+    function combineForState(stateName) {
+        const types = stateToTypes.get(stateName) || new Set();
+        const hasExistingSkill = types.has('skill') || types.has('both');
+        const hasExistingSubject = types.has('subject') || types.has('both');
+        if (normalizedSpotlightType === 'both') return 'both';
+        if (normalizedSpotlightType === 'skill' && hasExistingSubject) return 'both';
+        if (normalizedSpotlightType === 'subject' && hasExistingSkill) return 'both';
+        return normalizedSpotlightType;
+    }
+
+    const stateFinalTypes = new Map();
+    for (const s of statesToInsert) {
+        stateFinalTypes.set(s, combineForState(s));
+    }
+
+    // Use the first purchased state's combined type for the global teachers1 record
+    let finalSpotlightType = statesToInsert.length > 0 ? stateFinalTypes.get(statesToInsert[0]) : normalizedSpotlightType;
 
     // Update teacher spotlight status (3 months expiry)
     const expiry = new Date();
@@ -135,14 +156,14 @@ router.post('/verify-payment-spotlight', verifyToken, async (req, res) => {
 
     // ── Write per-state spotlight row (supports multi-state purchases) ──
     // Each purchased state gets its own row; type can be 'skill', 'subject', or 'both'.
-    if (state) {
-      const statesToInsert = Array.isArray(state) ? state : [state];
+    if (statesToInsert.length > 0) {
       const spotlightStateQuery = `
         INSERT INTO spotlight_states (teacher_email, state, spotlight_type, expiry, invoice_id)
         VALUES (?, ?, ?, ?, ?)
       `;
       for (const s of statesToInsert) {
-        await client.execute(spotlightStateQuery, [email, s, finalSpotlightType, expiry, invoiceId], { prepare: true });
+        const stateFinalType = stateFinalTypes.get(s) || normalizedSpotlightType;
+        await client.execute(spotlightStateQuery, [email, s, stateFinalType, expiry, invoiceId], { prepare: true });
       }
       console.log(`✅ spotlight_states rows written for teacher ${email} → states: ${statesToInsert.join(', ')}`);
     }

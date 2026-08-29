@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { Post, PostLike, PostComment, CommentLike, CommentReply, ReplyLike } = require('../models/Post');
+const Follow = require('../models/Follow');
 const mongoose = require('mongoose');
 const { uploadBase64ImageToS3 } = require('../config/s3');
 
@@ -234,6 +235,13 @@ router.get('/all', verifyToken, async (req, res) => {
       .lean();
     const likedPostIds = new Set(userLikes.map(like => like.post_id));
 
+    // Get all teachers the current user already follows, so the feed can
+    // tell the client whether to show "Follow" or "Following" per post
+    const follows = await Follow.find({ follower_email: userEmail })
+      .select('following_email')
+      .lean();
+    const followingSet = new Set(follows.map(f => f.following_email));
+
     const formattedPosts = posts.map(post => ({
       id: post.id,
       author: {
@@ -247,7 +255,9 @@ router.get('/all', verifyToken, async (req, res) => {
       likes: post.likes || 0,
       createdAt: post.created_at,
       tags: post.tags || [],
-      isLiked: likedPostIds.has(post.id)
+      isLiked: likedPostIds.has(post.id),
+      // Own posts are treated as "already followed" so no follow button renders on them
+      isFollowingAuthor: followingSet.has(post.author_email) || post.author_email === userEmail
     }));
 
     res.json({
@@ -303,6 +313,151 @@ router.get('/my', verifyToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch my posts'
+    });
+  }
+});
+
+// Get posts only from teachers the current user follows.
+// IMPORTANT: this route must stay registered BEFORE the generic
+// GET /:postId route below it, otherwise Express will treat
+// "feed" as a postId value and this will never be reached.
+router.get('/feed/following', verifyToken, async (req, res) => {
+  try {
+    const userEmail = req.user.email;
+
+    const follows = await Follow.find({ follower_email: userEmail })
+      .select('following_email')
+      .lean();
+    const followingEmails = follows.map(f => f.following_email);
+
+    if (followingEmails.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const posts = await Post.find({ author_email: { $in: followingEmails } })
+      .sort({ created_at: -1 })
+      .lean();
+
+    const userLikes = await PostLike.find({ user_email: userEmail })
+      .select('post_id')
+      .lean();
+    const likedPostIds = new Set(userLikes.map(l => l.post_id));
+
+    const formattedPosts = posts.map(post => ({
+      id: post.id,
+      author: {
+        email: post.author_email,
+        name: post.author_name,
+        role: post.author_role,
+        profile_pic: post.author_profile_pic
+      },
+      content: post.content,
+      postImage: getImageUrl(post.post_image),
+      likes: post.likes || 0,
+      createdAt: post.created_at,
+      tags: post.tags || [],
+      isLiked: likedPostIds.has(post.id),
+      isFollowingAuthor: true
+    }));
+
+    res.json({
+      success: true,
+      data: formattedPosts
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching following feed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch following feed'
+    });
+  }
+});
+
+// Follow the author of a specific post. The client only ever sends a
+// postId — the server resolves which teacher wrote it and follows them.
+// This is intentional: it prevents a client from following an arbitrary
+// email address that didn't come from an actual Thought.
+router.post('/:postId/follow-author', verifyToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const followerEmail = req.user.email;
+
+    const post = await Post.findOne({ id: postId }).select('author_email').lean();
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    const teacherEmail = post.author_email;
+
+    if (teacherEmail === followerEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "You can't follow yourself"
+      });
+    }
+
+    // Upsert keeps this idempotent: following the same teacher again
+    // via a different one of their posts just no-ops instead of erroring.
+    await Follow.updateOne(
+      { follower_email: followerEmail, following_email: teacherEmail },
+      {
+        $setOnInsert: {
+          follower_email: followerEmail,
+          following_email: teacherEmail,
+          followed_at: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Followed successfully',
+      data: { teacherEmail }
+    });
+
+  } catch (error) {
+    console.error('❌ Error following author:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to follow author'
+    });
+  }
+});
+
+// Unfollow the author of a specific post
+router.delete('/:postId/follow-author', verifyToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const followerEmail = req.user.email;
+
+    const post = await Post.findOne({ id: postId }).select('author_email').lean();
+    if (!post) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post not found'
+      });
+    }
+
+    await Follow.deleteOne({
+      follower_email: followerEmail,
+      following_email: post.author_email
+    });
+
+    res.json({
+      success: true,
+      message: 'Unfollowed successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error unfollowing author:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to unfollow author'
     });
   }
 });

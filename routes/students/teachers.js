@@ -50,6 +50,23 @@ function getSpotlightCategories(t) {
     return { isSkill: hasSkill(t), isSubject: hasSubject(t) };
 }
 
+function combineSpotlightTypes(types) {
+    if (!types || types.size === 0) return '';
+    const normalized = new Set();
+    for (const t of types) {
+        const s = String(t).toLowerCase();
+        if (s === 'both' || s === 'subject' || s === 'skill') {
+            normalized.add(s);
+        }
+    }
+    if (normalized.has('both') || (normalized.has('subject') && normalized.has('skill'))) {
+        return 'both';
+    }
+    if (normalized.has('subject')) return 'subject';
+    if (normalized.has('skill')) return 'skill';
+    return '';
+}
+
  router.post("/teachers", verifyToken, async (req, res) => {
     const count = parseInt(req.body.count) || 10;
     const searchQuery = req.body.search || "";
@@ -152,22 +169,25 @@ function getSpotlightCategories(t) {
                     `SELECT teacher_email, spotlight_type, expiry FROM spotlight_states WHERE state = ? ALLOW FILTERING`,
                     [studentState.trim()], { prepare: true }
                 );
-                const validEmails = new Map(); // email → spotlight_type
+                const emailToTypes = new Map(); // email → Set of spotlight_type values
                 for (const row of stateResult.rows) {
                     if (row.expiry && new Date(row.expiry) > now) {
-                        validEmails.set(row.teacher_email, row.spotlight_type);
+                        if (!emailToTypes.has(row.teacher_email)) {
+                            emailToTypes.set(row.teacher_email, new Set());
+                        }
+                        emailToTypes.get(row.teacher_email).add(row.spotlight_type);
                     }
                 }
 
                 // Match against full teacher pool (popular+spotlight Redis queues)
-                const spotlightPool = dedupedAll.filter(t => validEmails.has(t.email));
+                const spotlightPool = dedupedAll.filter(t => emailToTypes.has(t.email));
                 for (const t of spotlightPool) {
-                    t.spotlight_type = validEmails.get(t.email) || t.spotlight_type;
+                    t.spotlight_type = combineSpotlightTypes(emailToTypes.get(t.email)) || t.spotlight_type;
                     t.isspotlight = true;
                 }
                 // Any email not found in Redis → fetch from DB
                 const foundEmails = new Set(spotlightPool.map(t => t.email));
-                const missingEmails = [...validEmails.keys()].filter(e => !foundEmails.has(e));
+                const missingEmails = [...emailToTypes.keys()].filter(e => !foundEmails.has(e));
                 let dbTeachers = [];
                 if (missingEmails.length > 0) {
                     for (const teacherEmail of missingEmails) {
@@ -176,7 +196,7 @@ function getSpotlightCategories(t) {
                             [teacherEmail], { prepare: true }
                         );
                         for (const row of dbResult.rows) {
-                            dbTeachers.push({ email: row.email, name: row.name, category: row.category, introduction: row.introduction, isspotlight: true, profilepic: row.profilepic, qualifications: row.qualifications, teachingmode: row.teachingmode, tuitions: row.tuitions, workexperience: row.workexperience, spotlight_type: validEmails.get(row.email) || row.spotlight_type });
+                            dbTeachers.push({ email: row.email, name: row.name, category: row.category, introduction: row.introduction, isspotlight: true, profilepic: row.profilepic, qualifications: row.qualifications, teachingmode: row.teachingmode, tuitions: row.tuitions, workexperience: row.workexperience, spotlight_type: combineSpotlightTypes(emailToTypes.get(row.email)) || row.spotlight_type });
                         }
                     }
                 }
@@ -504,7 +524,10 @@ async function fetchTeachersFromDatabase(req, res, board, className, subject, un
                 for (const row of stateResult.rows) {
                     if (row.expiry && new Date(row.expiry) > now) {
                         spotlightStateEmails.add(row.teacher_email);
-                        emailToStateType[row.teacher_email] = row.spotlight_type;
+                        if (!emailToStateType[row.teacher_email]) {
+                            emailToStateType[row.teacher_email] = new Set();
+                        }
+                        emailToStateType[row.teacher_email].add(row.spotlight_type);
                     }
                 }
             } catch (e) {
@@ -608,7 +631,7 @@ async function fetchTeachersFromDatabase(req, res, board, className, subject, un
             if (spotlightStateEmails === null) return true; // no state filter
             if (!spotlightStateEmails.has(t.email)) return false;
             // Override spotlight_type from state-specific purchase
-            t.spotlight_type = emailToStateType[t.email] || t.spotlight_type;
+            t.spotlight_type = combineSpotlightTypes(emailToStateType[t.email]) || t.spotlight_type;
             return true;
         });
 
