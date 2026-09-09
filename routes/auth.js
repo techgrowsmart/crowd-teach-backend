@@ -90,7 +90,7 @@ router.post("/login", async (req, res) => {
         await client.execute(insertOTPQuery, params, { prepare: true });
 
         const mailOptions = {
-            from: `Your App <${process.env.EMAIL_USER}>`,
+            from: `Growsmart <${process.env.EMAIL_USER}>`,
             to: email,
             subject: "Your Login OTP Code",
             text: `Your OTP code is: ${otp}. It is valid for 2 minutes.`,
