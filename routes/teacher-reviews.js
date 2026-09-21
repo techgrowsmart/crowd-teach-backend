@@ -1,21 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const verifyToken = require('../utils/verifyToken');
-const mongoose = require('mongoose');
-
-// Teacher Review Schema
-const TeacherReviewSchema = new mongoose.Schema({
-  teacherEmail: { type: String, required: true, index: true },
-  studentEmail: { type: String, required: true },
-  studentName: { type: String, required: true },
-  rating: { type: Number, required: true, min: 1, max: 5 },
-  review: { type: String, required: true },
-  subject: { type: String },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
-
-const TeacherReview = mongoose.model('TeacherReview', TeacherReviewSchema);
+const TeacherReview = require('../models/TeacherReview');
 
 // Get reviews for a specific teacher
 router.get('/teacher-reviews', async (req, res) => {

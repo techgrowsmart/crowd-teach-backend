@@ -213,6 +213,8 @@ const redisClient= require("./config/redis")
 const allboards = require("./routes/teachers/allboards")
 const teachers = require("./routes/students/teachers")
 const teacherInfoRoutes = require("./routes/students/teacherInfo.js"); //for teachers list
+const teacherSearch = require("./routes/students/teacherSearch") // review based teacher search
+const studentSearch = require("./routes/teachers/studentSearch") // teacher-facing student search
 const valuesToselect = require("./routes/boardsValues")
 const favoritesRoutes = require("./routes/favorites");
 const testAuthRoutes = require('./routes/test-auth');
@@ -234,6 +236,10 @@ app.use("/api/auth", authRoutes);
 app.use('/api', updateRoleRouter);
 app.use("/api",getProfie)
 app.use("/api",valuesToselect)
+// Review based teacher search – registered before /api/teachers so that the
+// /teachers/search alias is not swallowed by the teachers router.
+app.use("/api",teacherSearch)
+app.use("/api",studentSearch) // teacher-facing student search (auth required)
 app.use("/api",teachers)
 app.use("/api",allboards)
 //for create subject - register before messages to prevent route collision

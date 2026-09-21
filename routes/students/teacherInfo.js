@@ -180,6 +180,37 @@ router.post("/teacherInfo", verifyToken, async (req, res) => {
         const uniqueSpotlight = deduplicateTeachers(filteredSpotlight);
         const uniquePopular = deduplicateTeachers(filteredPopular);
 
+        // ── Per-state spotlight purchase data (studentState from request) ──
+        const studentState = req.body.studentState || '';
+        const emailToSpotlightStates = new Map();
+        if (studentState && studentState.trim()) {
+            try {
+                const now = new Date();
+                const stateResult = await client.execute(
+                    `SELECT teacher_email, state, spotlight_type, expiry, invoice_id FROM spotlight_states WHERE state = ? ALLOW FILTERING`,
+                    [studentState.trim()], { prepare: true }
+                );
+                for (const row of stateResult.rows) {
+                    if (row.expiry && new Date(row.expiry) > now) {
+                        if (!emailToSpotlightStates.has(row.teacher_email)) {
+                            emailToSpotlightStates.set(row.teacher_email, []);
+                        }
+                        emailToSpotlightStates.get(row.teacher_email).push({
+                            state: row.state,
+                            spotlight_type: row.spotlight_type,
+                            expiry: row.expiry,
+                            invoice_id: row.invoice_id,
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('⚠️ spotlight_states query failed in teacherInfo:', e.message);
+            }
+        }
+
+        for (const t of uniqueSpotlight) { t.spotlight_states = emailToSpotlightStates.get(t.email) || []; }
+        for (const t of uniquePopular) { t.spotlight_states = emailToSpotlightStates.get(t.email) || []; }
+
         console.log(`📊 TeacherInfo Filtering Results:`, {
             board,
             className, 
