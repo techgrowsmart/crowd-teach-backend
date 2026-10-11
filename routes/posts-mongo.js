@@ -9,6 +9,18 @@ const { Post, PostLike, PostComment, CommentLike, CommentReply, ReplyLike } = re
 const Follow = require('../models/Follow');
 const mongoose = require('mongoose');
 const { uploadBase64ImageToS3 } = require('../config/s3');
+const { getIO } = require('../socket');
+
+// Push a Thoughts feed change to every connected client so feeds update
+// instantly instead of waiting for the next refetch. Best effort: a socket
+// failure must never fail the HTTP request that caused it.
+function emitFeedEvent(event, payload) {
+  try {
+    require('../socket').getIO().emit(event, payload);
+  } catch (error) {
+    console.error(`❌ Failed to emit ${event}:`, error.message);
+  }
+}
 
 const uploadDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadDir)) {
@@ -117,6 +129,36 @@ function getImageUrl(imagePath) {
   const baseUrl = process.env.BASE_URL || 'https://growsmartserver.gogrowsmart.com';
   return `${baseUrl}${imagePath}`;
 }
+// Shape a post exactly like GET /all does (minus the per-viewer flags), so
+// realtime payloads can be dropped straight into any client feed.
+function formatPost(post) {
+  return {
+    id: post.id,
+    author: {
+      email: post.author_email,
+      name: post.author_name,
+      role: post.author_role,
+      profile_pic: post.author_profile_pic || ''
+    },
+    content: post.content,
+    postImage: getImageUrl(post.post_image),
+    likes: post.likes || 0,
+    createdAt: post.created_at,
+    tags: post.tags || []
+  };
+}
+
+// Push a Thoughts change to every connected client (students + teachers).
+// Payloads are tiny (no images inline, just URLs), so a single io.emit is the
+// cheapest way to keep every open feed in sync without any client polling.
+function emitThoughtsEvent(event, data) {
+  try {
+    getIO().emit(event, data);
+  } catch (error) {
+    console.error(`❌ Failed to emit ${event}:`, error.message);
+  }
+}
+
 function saveBase64Image(base64String, filename) {
   try {
     // Remove data URL prefix if present
@@ -194,6 +236,23 @@ router.post('/create', verifyToken, async (req, res) => {
     await newPost.save();
 
     console.log('✅ Post created successfully:', postId);
+
+    // Same shape as an item from GET /all. Viewer specific flags (isLiked,
+    // isFollowingAuthor) are resolved on each client.
+    emitFeedEvent('post_created', {
+      id: postId,
+      author: {
+        email: userEmail,
+        name: userProfile.name,
+        role: userRole,
+        profile_pic: userProfile.profile_pic
+      },
+      content: newPost.content,
+      postImage: getImageUrl(postImagePath),
+      likes: 0,
+      createdAt: newPost.created_at,
+      tags: tagsArray
+    });
 
     res.status(201).json({
       success: true,
@@ -537,13 +596,20 @@ router.post('/:postId/like', verifyToken, async (req, res) => {
     });
     await newLike.save();
 
-    // Increment likes counter
-    post.likes = (post.likes || 0) + 1;
-    await post.save();
+    // Atomic increment so concurrent likes never lose a count
+    const updated = await Post.findOneAndUpdate(
+      { id: postId },
+      { $inc: { likes: 1 } },
+      { new: true, projection: { likes: 1 } }
+    ).lean();
+    const likes = updated?.likes || 0;
+
+    emitThoughtsEvent('thought:likes', { postId, likes, by: userEmail, liked: true });
 
     res.json({
       success: true,
-      message: 'Post liked successfully'
+      message: 'Post liked successfully',
+      likes
     });
 
   } catch (error) {
@@ -565,12 +631,15 @@ router.delete('/:postId/like', verifyToken, async (req, res) => {
     const deletedLike = await PostLike.findOneAndDelete({ post_id: postId, user_email: userEmail });
     
     if (deletedLike) {
-      // Decrement likes counter
-      const post = await Post.findOne({ id: postId });
-      if (post) {
-        post.likes = Math.max(0, (post.likes || 0) - 1);
-        await post.save();
-      }
+      // Atomic decrement, never below zero
+      const updated = await Post.findOneAndUpdate(
+        { id: postId, likes: { $gt: 0 } },
+        { $inc: { likes: -1 } },
+        { new: true, projection: { likes: 1 } }
+      ).lean();
+      const likes = updated?.likes || 0;
+
+      emitThoughtsEvent('thought:likes', { postId, likes, by: userEmail, liked: false });
     }
 
     res.json({
@@ -636,18 +705,31 @@ router.post('/:postId/comments', verifyToken, async (req, res) => {
 
     await newComment.save();
 
+    const commentAuthor = {
+      email: userEmail,
+      name: userProfile.name,
+      role: userRole,
+      profile_pic: userProfile.profile_pic
+    };
+
+    emitThoughtsEvent('thought:comment', {
+      postId,
+      comment: {
+        id: commentId,
+        author: commentAuthor,
+        content: content.trim(),
+        likes: 0,
+        createdAt: newComment.created_at
+      }
+    });
+
     res.status(201).json({
       success: true,
       message: 'Comment added successfully',
       data: {
         id: commentId,
         post_id: postId,
-        author: {
-          email: userEmail,
-          name: userProfile.name,
-          role: userRole,
-          profile_pic: userProfile.profile_pic
-        },
+        author: commentAuthor,
         content: content.trim(),
         likes: 0,
         created_at: newComment.created_at
@@ -835,6 +917,8 @@ router.delete('/:postId', verifyToken, async (req, res) => {
     await PostLike.deleteMany({ post_id: postId });
     await PostComment.deleteMany({ post_id: postId });
     await CommentReply.deleteMany({ post_id: postId });
+
+    emitFeedEvent('post_deleted', { id: postId });
 
     res.json({
       success: true,

@@ -338,6 +338,104 @@ router.get('/teacher-contacts', verifyToken, async (req, res) => {
     }
 });
 
+// POST /api/chat/assign-subject - Student picks the subject for a chat the teacher started.
+// Turns the subject-less contact into a normal subject contact and moves its messages
+// into that subject's thread, so the chat behaves like one opened from the teacher's profile.
+router.post('/assign-subject', verifyToken, async (req, res) => {
+    try {
+        const studentEmail = req.user?.email;
+        const { teacherEmail, subject, className, boardOrUniversity, contactTitle } = req.body;
+
+        if (!studentEmail || !teacherEmail || !subject || !contactTitle) {
+            return res.status(400).json({ success: false, error: "teacherEmail, subject and contactTitle are required" });
+        }
+        if (req.user?.role && req.user.role !== 'student') {
+            return res.status(403).json({ success: false, error: "Only students can pick a subject" });
+        }
+
+        const pairResult = await client.execute(
+            `SELECT * FROM contacts WHERE teacher_email = ? AND student_email = ? ALLOW FILTERING`,
+            [teacherEmail, studentEmail],
+            { prepare: true }
+        );
+        const pairRows = pairResult.rows || [];
+        const subjectlessRows = pairRows.filter(row => !row.subject && !row.title);
+        if (subjectlessRows.length === 0) {
+            return res.status(404).json({ success: false, error: "No teacher-started chat found for this teacher" });
+        }
+
+        // Same chat id rules as /api/messages/send
+        const slug = (value) => String(value).toLowerCase().replace(/\s+/g, '_');
+        const newChatId = [studentEmail, teacherEmail, slug(contactTitle.trim())].sort().join("_");
+
+        for (const row of subjectlessRows) {
+            const oldParts = [teacherEmail, studentEmail];
+            if (row.class_name) oldParts.push(slug(row.class_name));
+            if (row.board_or_university) oldParts.push(slug(row.board_or_university));
+            const oldChatId = oldParts.sort().join("_");
+            if (oldChatId === newChatId) continue;
+
+            const messages = await client.execute(`SELECT * FROM messages WHERE chat_id = ?`, [oldChatId], { prepare: true });
+            for (const msg of messages.rows || []) {
+                await client.execute(
+                    `INSERT INTO messages
+                     (id, sender_email, recipient_email, text, timestamp, is_read, chat_id, created_at, sender_name, encrypted, public_key, message_hash, subject, class_name, board_or_university, title)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        msg.id, msg.sender_email, msg.recipient_email, msg.text, msg.timestamp,
+                        msg.is_read || false, newChatId, msg.created_at, msg.sender_name,
+                        msg.encrypted || false, msg.public_key || null, msg.message_hash || null,
+                        subject, className || null, boardOrUniversity || null, contactTitle
+                    ],
+                    { prepare: true }
+                );
+            }
+            await client.execute(`DELETE FROM messages WHERE chat_id = ?`, [oldChatId], { prepare: true });
+        }
+
+        // Create the subject contact unless the student already has one for this tuition
+        if (!pairRows.some(row => row.title === contactTitle)) {
+            const source = subjectlessRows[0];
+            const contactId = `contact_${teacherEmail}_${studentEmail}_${contactTitle.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            await client.execute(
+                `INSERT INTO contacts (
+                    id, teacher_email, student_email, teacher_name, student_name,
+                    teacher_profile_pic, student_profile_pic, subject, class_name, board_or_university, title, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    contactId, teacherEmail, studentEmail, source.teacher_name, source.student_name,
+                    source.teacher_profile_pic, source.student_profile_pic,
+                    subject, className || '', boardOrUniversity || '', contactTitle,
+                    'active', source.created_at || new Date(), new Date()
+                ],
+                { prepare: true }
+            );
+        }
+
+        for (const row of subjectlessRows) {
+            await client.execute(`DELETE FROM contacts WHERE id = ?`, [row.id], { prepare: true });
+        }
+
+        // Let the teacher's open chat switch to the subject thread
+        try {
+            const { getIO } = require('../socket');
+            getIO().to(`user:${teacherEmail}`).emit('contact_subject_assigned', {
+                studentEmail, subject, className: className || '', boardOrUniversity: boardOrUniversity || '', contactTitle
+            });
+        } catch (socketError) {
+            console.warn('⚠️ WebSocket emit failed:', socketError.message);
+        }
+
+        return res.json({
+            success: true,
+            contact: { email: teacherEmail, subject, className: className || '', boardOrUniversity: boardOrUniversity || '', contactTitle }
+        });
+    } catch (error) {
+        console.error("❌ Error assigning subject to contact:", error);
+        return res.status(500).json({ success: false, error: "Failed to assign subject" });
+    }
+});
+
 // POST /api/chat/mark-all-read - Mark all messages as read for current user
 router.post('/mark-all-read', verifyToken, async (req, res) => {
     try {

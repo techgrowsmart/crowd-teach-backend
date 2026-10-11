@@ -5,6 +5,7 @@ const verifyToken = require("./../utils/verifyToken")
 const { v1: uuidv1 } = require('uuid');
 const axios = require("axios");
 const client = require("../config/db");
+const { getBlockState } = require("../services/blockService");
 
 const sendExpoPushNotification = async (to, title, body) => {
     try {
@@ -30,6 +31,22 @@ router.post("/send", verifyToken, async (req, res) => {
 
     if (!sender || !recipient || !text) {
         return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    // Refuse the message if either side has blocked the other
+    try {
+        const { blockedByMe, blockedMe } = await getBlockState(sender, recipient);
+        if (blockedByMe || blockedMe) {
+            return res.status(403).json({
+                message: blockedByMe ? "Unblock this contact to send a message" : "You can no longer send messages to this contact",
+                code: "CHAT_BLOCKED",
+                blockedByMe,
+                blockedMe
+            });
+        }
+    } catch (blockError) {
+        console.error('❌ Block check failed:', blockError.message);
+        return res.status(503).json({ message: "Could not send message. Please try again." });
     }
 
     // Generate context-aware chat ID

@@ -6,6 +6,7 @@
 const { getIO, getConnectedUsers, connectedUsers } = require('../socket');
 const client = require('../config/db');
 const { v1: uuidv1 } = require('uuid');
+const { getBlockState } = require('./blockService');
 
 // In-memory stores for active chats and broadcast groups
 const activeChats = new Map(); // chatId -> { participants: [], messages: [] }
@@ -180,6 +181,18 @@ function initChatSocket(socket, email, role) {
       
       if (!recipientEmail || !text) {
         socket.emit('message_error', { error: 'Recipient and text required' });
+        return;
+      }
+
+      // Refuse the message if either side has blocked the other
+      const { blockedByMe, blockedMe } = await getBlockState(email, recipientEmail);
+      if (blockedByMe || blockedMe) {
+        socket.emit('message_error', {
+          error: blockedByMe ? 'Unblock this contact to send a message' : 'You can no longer send messages to this contact',
+          code: 'CHAT_BLOCKED',
+          blockedByMe,
+          blockedMe
+        });
         return;
       }
 
@@ -577,27 +590,36 @@ function initChatSocket(socket, email, role) {
   socket.on('join_broadcast', async (data) => {
     try {
       const { groupId } = data;
-      if (!groupId) {
-        socket.emit('broadcast_error', { error: 'Group ID required' });
-        return;
-      }
+      if (!groupId) return;
 
-      // Parse group info
-      const groupInfo = parseGroupId(groupId);
-      
-      // Verify student is subscribed to this group
+      // Prefer explicit group details from the client; groupId parsing is lossy
+      // (subjects/classes containing underscores, multi-part email domains)
+      const parsed = parseGroupId(groupId);
+      const teacherEmail = data.teacherEmail || parsed.teacherEmail;
+      const subject = data.subject || parsed.subject;
+      const className = data.className ?? parsed.className;
+
+      // Verify student is subscribed to this group (same className fallbacks as /api/broadcast/history)
       const checkQuery = `
         SELECT * FROM booking_requests 
         WHERE student_email = ? AND teacher_email = ? AND subject = ? AND class_name = ? AND status = ?
         ALLOW FILTERING
       `;
-      
-      const checkResult = await client.execute(checkQuery, [
-        email, groupInfo.teacherEmail, groupInfo.subject, groupInfo.className, 'subscribed'
-      ], { prepare: true });
-      
-      if (!checkResult.rows || checkResult.rows.length === 0) {
-        socket.emit('broadcast_error', { error: 'You are not subscribed to this broadcast group' });
+
+      let isSubscribed = false;
+      for (const cn of [className, '', 'All Classes', null]) {
+        const checkResult = await client.execute(checkQuery, [
+          email, teacherEmail, subject, cn, 'subscribed'
+        ], { prepare: true });
+        if (checkResult.rows && checkResult.rows.length > 0) {
+          isSubscribed = true;
+          break;
+        }
+      }
+
+      if (!isSubscribed) {
+        // Students only see broadcasts they're subscribed to, so don't surface this as an error
+        console.warn(`📢 Student ${email} could not be verified for broadcast room: ${groupId}`);
         return;
       }
 
@@ -607,8 +629,8 @@ function initChatSocket(socket, email, role) {
       
       socket.emit('broadcast_joined', { groupId, success: true });
     } catch (error) {
+      // Joining the room only enables real-time updates; don't surface as an error
       console.error('❌ Error joining broadcast:', error);
-      socket.emit('broadcast_error', { error: 'Failed to join broadcast group' });
     }
   });
 

@@ -249,6 +249,7 @@ app.use("/api/messages", messages)
 // Additional chat endpoints (contacts, etc.)
 const chatRoutes = require('./routes/chat');
 app.use("/api/chat", chatRoutes);
+app.use("/api/blocks", require('./routes/blocks'));
 app.use("/api/broadcast", broadcastRoutes)
 app.use("/api",myTutors)
 app.use('/api/payments', paymentRoutes);

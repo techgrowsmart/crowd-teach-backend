@@ -92,6 +92,133 @@ router.post('/delete-by-subject', verifyToken, async (req, res) => {
     }
 });
 
+// POST /api/broadcast/remove-students - Teacher removes students from one of their broadcast groups.
+// The students' bookings for that group stop being 'subscribed', so they leave the group
+// everywhere it is derived from booking_requests and can send a new booking request.
+router.post('/remove-students', verifyToken, async (req, res) => {
+    try {
+        const teacherEmail = req.user.email;
+        const { subject, className, studentEmails } = req.body || {};
+
+        if (!subject || typeof subject !== 'string') {
+            return res.status(400).json({ success: false, error: 'Subject is required' });
+        }
+        if (!Array.isArray(studentEmails) || studentEmails.length === 0 ||
+            studentEmails.some(email => typeof email !== 'string' || !email)) {
+            return res.status(400).json({ success: false, error: 'studentEmails must be a non-empty array of emails' });
+        }
+
+        const groupClassName = normalizeClassName(className);
+        const groupId = `group_${teacherEmail}_${subject}_${groupClassName}`;
+        const targets = new Set(studentEmails);
+
+        // Same source and grouping as GET /groups, so exactly the students shown in the group match
+        const result = await client.execute(
+            `SELECT id, student_email, subject, class_name FROM booking_requests
+             WHERE teacher_email = ? AND status = 'subscribed' ALLOW FILTERING`,
+            [teacherEmail],
+            { prepare: true }
+        );
+        const rows = (result.rows || []).filter(row =>
+            targets.has(row.student_email) &&
+            (row.subject || 'General') === subject &&
+            normalizeClassName(row.class_name) === groupClassName
+        );
+
+        const now = new Date();
+        const teacherResponse = 'Teacher removed you from this class';
+        const removedRows = [];
+        const failed = new Set();
+
+        for (const row of rows) {
+            try {
+                await client.execute(
+                    `UPDATE booking_requests SET status = ?, updated_at = ?, teacher_response = ? WHERE id = ?`,
+                    ['removed', now, teacherResponse, row.id],
+                    { prepare: true }
+                );
+                removedRows.push(row);
+            } catch (updateError) {
+                console.error('❌ Error removing student from broadcast group:', row.id, updateError);
+                failed.add(row.student_email);
+            }
+        }
+
+        if (rows.length > 0 && removedRows.length === 0) {
+            return res.status(500).json({ success: false, error: 'Failed to remove students' });
+        }
+
+        // Keep the in-memory booking cache in line with the database
+        try {
+            const { bookingRequests } = require('./booking');
+            for (const row of removedRows) {
+                const cached = bookingRequests.get(row.id);
+                if (cached) {
+                    cached.status = 'removed';
+                    cached.teacherResponse = teacherResponse;
+                    cached.updatedAt = now.toISOString();
+                }
+            }
+        } catch (cacheError) {
+            console.warn('⚠️ Could not update booking cache:', cacheError.message);
+        }
+
+        // Drop the legacy subscription tracking rows
+        for (const row of removedRows) {
+            for (const cn of new Set([row.class_name || '', groupClassName])) {
+                try {
+                    await client.execute(
+                        `DELETE FROM broadcast_table WHERE teacherEmail = ? AND className = ? AND subject = ? AND studentEmail = ?`,
+                        [teacherEmail, cn, row.subject, row.student_email],
+                        { prepare: true }
+                    );
+                } catch (trackingError) {
+                    console.warn('⚠️ Could not delete broadcast tracking row:', trackingError.message);
+                }
+            }
+        }
+
+        // Stop real-time delivery and tell the student their subscription ended
+        try {
+            const { getIO, removeFromSubjectGroup } = require('../socket');
+            const io = getIO();
+            for (const row of removedRows) {
+                removeFromSubjectGroup(teacherEmail, row.subject, row.class_name || '', row.student_email);
+                if (io) {
+                    io.in(`user:${row.student_email}`).socketsLeave(`broadcast:${groupId}`);
+                    io.to(`user:${row.student_email}`).emit('booking_status_update', {
+                        bookingId: row.id,
+                        teacherEmail,
+                        teacherName: req.user.name || teacherEmail,
+                        status: 'removed',
+                        message: teacherResponse,
+                        timestamp: now.toISOString(),
+                        subject: row.subject,
+                        className: row.class_name || ''
+                    });
+                }
+            }
+        } catch (socketErr) {
+            console.warn('⚠️ Socket notification failed:', socketErr.message);
+        }
+
+        const removedStudents = [...new Set(removedRows.map(row => row.student_email))]
+            .filter(email => !failed.has(email));
+
+        res.status(200).json({
+            success: true,
+            groupId,
+            removedStudents,
+            removedCount: removedStudents.length,
+            failedStudents: [...failed]
+        });
+
+    } catch (error) {
+        console.error("❌ Error removing students from broadcast group:", error);
+        res.status(500).json({ success: false, error: 'Failed to remove students' });
+    }
+});
+
 // GET /api/broadcast/teacher-subjects - Get subjects a teacher can broadcast to
 router.get("/teacher-subjects", verifyToken, async (req, res) => {
     try {

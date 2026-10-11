@@ -359,6 +359,18 @@ router.get('/teacher-requests', verifyToken, async (req, res) => {
   }
 });
 
+// A 'removed' booking (teacher removed the student from the broadcast group) is history only.
+// Once the student books the same class again, hide it so clients read the newer booking's status.
+const hideSupersededRemovals = (requests) => requests.filter(r =>
+  r.status !== 'removed' || !requests.some(o =>
+    o !== r &&
+    o.teacherEmail === r.teacherEmail &&
+    o.subject === r.subject &&
+    (o.className || '') === (r.className || '') &&
+    new Date(o.timestamp) > new Date(r.timestamp)
+  )
+);
+
 // GET /api/bookings/student-requests - Get all requests by a student
 router.get('/student-requests', verifyToken, async (req, res) => {
   try {
@@ -389,7 +401,7 @@ router.get('/student-requests', verifyToken, async (req, res) => {
 
         return res.json({
           success: true,
-          requests: requests.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          requests: hideSupersededRemovals(requests).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
         });
       }
     } catch (dbError) {
@@ -403,7 +415,7 @@ router.get('/student-requests', verifyToken, async (req, res) => {
 
     res.json({
       success: true,
-      requests: requests
+      requests: hideSupersededRemovals(requests)
     });
   } catch (error) {
     console.error('Error fetching student requests:', error);
@@ -417,7 +429,10 @@ router.get('/student-requests', verifyToken, async (req, res) => {
 // PUT /api/bookings/respond - Teacher responds to a booking request OR student marks as subscribed after payment
 router.put('/respond', verifyToken, async (req, res) => {
   try {
-    const { bookingId, status, message } = req.body;
+    const { bookingId, message } = req.body;
+    // Accepting a request subscribes the student directly (adds them to the broadcast group).
+    // 'accepted' is still accepted from older clients but stored as 'subscribed'.
+    const status = req.body.status === 'accepted' ? 'subscribed' : req.body.status;
     const userEmail = req.user.email;
     const userName = req.user.name;
     const userRole = req.user.role;
@@ -581,6 +596,18 @@ router.put('/respond', verifyToken, async (req, res) => {
           className: booking.className
         });
         console.log(`✅ Real-time status update sent to student: ${booking.studentEmail}`);
+
+        // Booking is now persisted as subscribed - let the teacher refresh broadcast groups
+        if (status === 'subscribed') {
+          io.to(`user:${booking.teacherEmail}`).emit('student_joined_broadcast', {
+            groupId: `group_${booking.teacherEmail}_${booking.subject}_${booking.className || ''}`,
+            studentEmail: booking.studentEmail,
+            studentName: booking.studentName || booking.studentEmail,
+            boardOrUniversity: booking.boardOrUniversity || '',
+            classOrYear: booking.className || '',
+            subject: booking.subject
+          });
+        }
       } catch (socketError) {
         console.error('Socket notification failed:', socketError);
       }

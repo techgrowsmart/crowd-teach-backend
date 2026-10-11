@@ -127,7 +127,9 @@ function initSocket(server) {
 
     // Handle teacher's response to booking
     socket.on('booking_response', async (data) => {
-      const { bookingId, studentEmail, status, message, subject, className, studentName, boardOrUniversity } = data;
+      const { bookingId, studentEmail, message, subject, className, studentName, boardOrUniversity } = data;
+      // Accepting a request subscribes the student directly (see PUT /api/bookings/respond)
+      const status = data.status === 'accepted' ? 'subscribed' : data.status;
       
       console.log(`✅ Teacher ${email} ${status} booking ${bookingId}`);
       
@@ -160,25 +162,9 @@ function initSocket(server) {
         });
       }
 
-      if (status === 'subscribed') {
-        console.log(`🎉 Booking ${bookingId} marked as subscribed - updating broadcast groups`);
-        
-        // Notify teacher about new student in broadcast group
-        io.to(`user:${email}`).emit('student_joined_broadcast', {
-          groupId: `group_${email}_${subject}_${className}`,
-          studentEmail,
-          studentName: studentName || studentEmail,
-          boardOrUniversity: boardOrUniversity || '',
-          classOrYear: className,
-          subject
-        });
-        
-        // Refresh teacher's broadcast groups
-        const { getTeacherBroadcastGroups } = require('./services/socket-chat');
-        const groups = await getTeacherBroadcastGroups(email);
-        io.to(`user:${email}`).emit('broadcast_groups', { groups });
-      }
-      
+      // Broadcast-group refresh for the teacher is emitted by PUT /api/bookings/respond
+      // after the subscription is persisted, so the refetched groups include the student.
+
       // Confirm to teacher
       socket.emit('booking_response_confirmed', {
         success: true,
